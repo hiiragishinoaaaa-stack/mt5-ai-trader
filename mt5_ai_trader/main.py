@@ -7,6 +7,10 @@ logs/trades.log に出力する。
 このMVPでは注文(発注)は一切行わない。判断結果を記録するところまでが
 スコープであり、実売買は将来のステップで order_executor.py 等を追加して
 対応する想定。
+
+注意: mt5_client.MT5Client は接続〜データ取得を別プロセスで実行するため、
+Windows上でmultiprocessingが正しく動作するよう、本ファイルの
+`if __name__ == "__main__":` ガードは削除しないこと。
 """
 from __future__ import annotations
 
@@ -30,17 +34,16 @@ logger = logging.getLogger("mt5_ai_trader")
 def run_once(client: MT5Client, ai_engine) -> Signal | None:
     """1回分のデータ取得 → 指標計算 → AI判断 → ログ出力を行う。
 
-    データ取得や判断のどこで例外が起きても、ここで捕捉してログに残し、
-    呼び出し元(ループ)を落とさない。
+    データ取得(別プロセスでのMT5接続を含む)や判断のどこで例外が起きても、
+    ここで捕捉してログに残し、呼び出し元(ループ)を落とさない。
     """
     try:
-        tick = client.get_latest_tick(config.SYMBOL)
-        candles = client.get_candles(config.SYMBOL, config.TIMEFRAME, config.BARS_COUNT)
-        enriched = indicators.add_indicators(candles)
+        snapshot = client.fetch_snapshot(config.SYMBOL, config.TIMEFRAME, config.BARS_COUNT)
+        enriched = indicators.add_indicators(snapshot.candles)
         signal = ai_engine.decide(enriched)
 
         message = (
-            f"[{config.SYMBOL}] bid={tick.bid} ask={tick.ask} "
+            f"[{config.SYMBOL}] bid={snapshot.tick.bid} ask={snapshot.tick.ask} "
             f"=> {signal.action} ({signal.reason})"
         )
         print(message)
@@ -81,24 +84,18 @@ def main() -> None:
     setup_logger(debug=args.debug)
 
     logger.info(
-        "設定: symbol=%s timeframe=%s bars_count=%s ai_engine=%s debug=%s",
+        "設定: symbol=%s timeframe=%s bars_count=%s ai_engine=%s debug=%s "
+        "fetch_timeout=%s秒",
         config.SYMBOL,
         config.TIMEFRAME,
         config.BARS_COUNT,
         config.AI_ENGINE,
         args.debug,
+        config.MT5_FETCH_TIMEOUT_SECONDS,
     )
 
     client = MT5Client()
     ai_engine = get_ai_engine()
-
-    try:
-        client.connect()
-    except MT5ConnectionError as exc:
-        logger.error("MT5への接続に失敗しました: %s", exc)
-        sys.exit(1)
-
-    logger.info("MT5接続に成功しました。データ取得を開始します。")
 
     exit_code = 0
     try:
@@ -116,9 +113,6 @@ def main() -> None:
                 time.sleep(args.interval)
     except KeyboardInterrupt:
         logger.info("ユーザーにより停止されました")
-    finally:
-        client.disconnect()
-        logger.info("MT5との接続を終了しました")
 
     sys.exit(exit_code)
 
