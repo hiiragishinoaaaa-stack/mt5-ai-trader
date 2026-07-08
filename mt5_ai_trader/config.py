@@ -32,6 +32,9 @@ MT5_LOGIN = _env_int("MT5_LOGIN", 0) or None
 MT5_PASSWORD = os.getenv("MT5_PASSWORD")
 MT5_SERVER = os.getenv("MT5_SERVER")
 MT5_TERMINAL_PATH = os.getenv("MT5_PATH")  # terminal64.exe のパス(任意)
+# mt5.initialize()に渡すタイムアウト(ミリ秒)。ターミナルが応答しない場合に
+# 無限に固まらないようにするためのガード。
+MT5_INIT_TIMEOUT_MS = _env_int("MT5_INIT_TIMEOUT_MS", 10000)
 
 # --- 取引対象 ---
 SYMBOL = os.getenv("SYMBOL", "USDJPY")

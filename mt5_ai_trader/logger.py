@@ -14,14 +14,18 @@ _MAX_BYTES = 5 * 1024 * 1024  # 5MB
 _BACKUP_COUNT = 5
 
 
-def setup_logger(name: str = "mt5_ai_trader") -> logging.Logger:
-    """コンソール+ファイル出力を設定したロガーを返す(冪等)。"""
+def setup_logger(name: str = "mt5_ai_trader", debug: bool = False) -> logging.Logger:
+    """コンソール+ファイル出力を設定したロガーを返す(ハンドラ登録は冪等)。
+
+    debug=True の場合、ログレベルをDEBUGに引き上げる(--debugオプション用)。
+    """
     logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG if debug else config.LOG_LEVEL)
+
     if logger.handlers:
-        return logger  # 二重登録を防ぐ
+        return logger  # ハンドラの二重登録を防ぐ(レベルは上で更新済み)
 
     config.LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logger.setLevel(config.LOG_LEVEL)
 
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

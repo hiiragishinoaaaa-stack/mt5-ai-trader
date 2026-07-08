@@ -11,6 +11,8 @@ logs/trades.log に出力する。
 from __future__ import annotations
 
 import argparse
+import logging
+import sys
 import time
 
 import config
@@ -19,7 +21,10 @@ from ai_engine import Signal, get_ai_engine
 from logger import setup_logger
 from mt5_client import MT5Client, MT5ConnectionError
 
-logger = setup_logger()
+# setup_logger()はmain()内で(--debugの有無を見た上で)呼び出す。
+# ここではハンドラ未設定のロガーを取得するだけ(setup_logger()と同じ名前の
+# ロガーを参照するため、後から設定した内容がそのまま反映される)。
+logger = logging.getLogger("mt5_ai_trader")
 
 
 def run_once(client: MT5Client, ai_engine) -> Signal | None:
@@ -63,11 +68,27 @@ def parse_args() -> argparse.Namespace:
         default=config.LOOP_INTERVAL_SECONDS,
         help="ループ実行時の取得間隔(秒)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="DEBUGレベルの詳細ログ(MT5との通信の内訳等)を出力する",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    setup_logger(debug=args.debug)
+
+    logger.info(
+        "設定: symbol=%s timeframe=%s bars_count=%s ai_engine=%s debug=%s",
+        config.SYMBOL,
+        config.TIMEFRAME,
+        config.BARS_COUNT,
+        config.AI_ENGINE,
+        args.debug,
+    )
+
     client = MT5Client()
     ai_engine = get_ai_engine()
 
@@ -75,18 +96,16 @@ def main() -> None:
         client.connect()
     except MT5ConnectionError as exc:
         logger.error("MT5への接続に失敗しました: %s", exc)
-        return
+        sys.exit(1)
 
-    logger.info(
-        "MT5接続に成功しました。symbol=%s timeframe=%s ai_engine=%s",
-        config.SYMBOL,
-        config.TIMEFRAME,
-        config.AI_ENGINE,
-    )
+    logger.info("MT5接続に成功しました。データ取得を開始します。")
 
+    exit_code = 0
     try:
         if args.once:
-            run_once(client, ai_engine)
+            signal = run_once(client, ai_engine)
+            if signal is None:
+                exit_code = 1
         else:
             logger.info(
                 "監視ループを開始します (interval=%s秒)。Ctrl+Cで終了します。",
@@ -100,6 +119,8 @@ def main() -> None:
     finally:
         client.disconnect()
         logger.info("MT5との接続を終了しました")
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
