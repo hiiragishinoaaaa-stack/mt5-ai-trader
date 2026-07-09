@@ -37,6 +37,14 @@ MT5 Python APIに一切依存しない構成に切り替えている。
 (`market_feed.py`)はそのファイルを読むだけにする。ファイルの読み込みは
 ローカルディスクI/Oのため、IPC通信のようにハングする心配がない。
 
+> **注意(`.mq5`ファイルを編集する場合)**: `ea/`配下の`.mq5`ファイルは
+> 非ASCII文字(日本語等)を含めないこと。日本語コメントを含むMQL5
+> ソースを一部のWindows環境のMetaEditorが誤ったコードページ
+> (Shift-JIS等)で読み込み、ファイル先頭のコメントブロックが正しく
+> 終端せず`input`宣言ごと壊れて`undeclared identifier`エラーになる
+> 事象を確認している。EAの説明はこのREADMEに書き、`.mq5`側は英語の
+> コメントのみにする。
+
 `indicators.py` と `ai_engine.py` は、データの取得経路が変わっても
 一切変更していない。`market_feed.py` が返すデータの形(pandas DataFrame、
 列は `time/open/high/low/close/tick_volume/spread/real_volume`)を、
@@ -72,6 +80,12 @@ MT5 Python APIに一切依存しない構成に切り替えている。
    自動的にMetaEditorが開きコンパイルされる(初回のみ)。
    MetaEditorのツールバーの「コンパイル」ボタンを押し、エラーが
    0件であることを確認する。
+   - `undeclared identifier` 等のエラーが大量に出る場合、リポジトリから
+     取得した`.mq5`ファイルがそのままコピーされているか確認する。
+     `MQL5\Experts`フォルダに手動でコピー&ペーストした際、テキスト
+     エディタ側の文字コード変換で壊れることがある。エクスプローラーで
+     `.mq5`ファイル自体をコピーする(ファイルの中身を別エディタで
+     開いて保存し直したりしない)こと。
 2. MT5に戻り、USDJPYのチャートを開く(なければ「ファイル」→「新規チャート」
    →「USDJPY」)。時間足は `.env` の `TIMEFRAME` と合わせる(既定は M15)。
 3. ナビゲーターの `ARTEMIS_MarketFeed` をチャート上にドラッグ&ドロップする。
