@@ -27,22 +27,37 @@ def _env_float(name: str, default: float) -> float:
     return float(raw) if raw else default
 
 
-# --- MT5接続情報 ---
-MT5_LOGIN = _env_int("MT5_LOGIN", 0) or None
-MT5_PASSWORD = os.getenv("MT5_PASSWORD")
-MT5_SERVER = os.getenv("MT5_SERVER")
-MT5_TERMINAL_PATH = os.getenv("MT5_PATH")  # terminal64.exe のパス(任意)
-# mt5.initialize()に渡すタイムアウト(ミリ秒)。ライブラリ側に対する
-# ソフトなヒントであり、これが無視された場合に備えて下記の
-# MT5_FETCH_TIMEOUT_SECONDS がOSレベルの強制終了(ハードな上限)を担う。
-MT5_INIT_TIMEOUT_MS = _env_int("MT5_INIT_TIMEOUT_MS", 10000)
-# 接続〜ティック取得〜ローソク足取得を実行する子プロセス全体の制限時間(秒)。
-# 超過した場合はプロセスごとterminate()/kill()する。
-MT5_FETCH_TIMEOUT_SECONDS = _env_int("MT5_FETCH_TIMEOUT_SECONDS", 20)
+def _default_market_data_path() -> Path:
+    """EA(ARTEMIS_MarketFeed.mq5)が書き出すJSONファイルの既定パスを返す。
+
+    MT5はFILE_COMMONフラグを付けたファイルを
+    %APPDATA%\\MetaQuotes\\Terminal\\Common\\Files\\ に書き出す。この場所は
+    ブローカーごとのターミナルインストール先やデータフォルダのハッシュ名に
+    依存しないため、Windows環境では追加設定なしでEAとPythonが同じファイルを
+    見つけられる。Windows以外(開発・テスト用)ではプロジェクト直下を使う。
+    """
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        return Path(appdata) / "MetaQuotes" / "Terminal" / "Common" / "Files" / "artemis_market_data.json"
+    return BASE_DIR / "artemis_market_data.json"
+
+
+# --- EAブリッジ(ファイル連携)設定 ---
+# MT5 Python API(MetaTrader5パッケージ)はIPC timeoutが解消できなかったため
+# 使用しない。代わりにMT5上で動くEAがJSONファイルへ価格データを書き出し、
+# Pythonはそのファイルを読むだけの構成にしている(詳細はmarket_feed.py参照)。
+_market_data_file_path_env = os.getenv("MARKET_DATA_FILE_PATH")
+MARKET_DATA_FILE_PATH = (
+    Path(_market_data_file_path_env) if _market_data_file_path_env else _default_market_data_path()
+)
+# EAの書き込みが止まっている(MT5が落ちている等)ことを検知するための
+# 許容遅延(秒)。EAのInpUpdateIntervalSecより十分大きい値にすること。
+MARKET_DATA_MAX_STALENESS_SECONDS = _env_int("MARKET_DATA_MAX_STALENESS_SECONDS", 30)
 
 # --- 取引対象 ---
+# EA側のInpSymbol / InpTimeframeと必ず一致させること(market_feed.pyが検証する)。
 SYMBOL = os.getenv("SYMBOL", "USDJPY")
-TIMEFRAME = os.getenv("TIMEFRAME", "M15")  # mt5_client.TIMEFRAME_MAP のキーに対応
+TIMEFRAME = os.getenv("TIMEFRAME", "M15")
 BARS_COUNT = _env_int("BARS_COUNT", 100)
 
 # --- インジケーター設定 ---

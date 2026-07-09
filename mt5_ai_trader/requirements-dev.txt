@@ -1,8 +1,3 @@
 # 開発・テスト用の依存関係。
-# MetaTrader5 パッケージはWindows専用のためここには含めない
-# (mt5_client.py は未インストールでも import エラーにならないよう設計されている)。
-# 実機(Windows + MT5ターミナル)で実行する際は requirements.txt を使う。
-pandas>=2.0.0
-numpy>=1.24.0
-python-dotenv>=1.0.0
+-r requirements.txt
 pytest>=8.0.0
