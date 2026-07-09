@@ -120,7 +120,10 @@ class FileOrderExecutor:
         try:
             tmp_path.parent.mkdir(parents=True, exist_ok=True)
             with tmp_path.open("w", encoding="utf-8") as f:
-                json.dump(request, f)
+                # EA側は簡易的な手書きJSONパーサ(区切り文字の間の空白を許容しない
+                # 実装だった場合に備え、区切り文字にスペースを入れないコンパクトな
+                # 形式で書き出す。json.dump()の既定(", " / ": ")は使わない。
+                json.dump(request, f, separators=(",", ":"))
             tmp_path.replace(config.ORDER_REQUEST_FILE_PATH)  # アトミックにリネーム
         except OSError as exc:
             raise OrderExecutionError(f"発注リクエストの書き出しに失敗しました: {exc}") from exc

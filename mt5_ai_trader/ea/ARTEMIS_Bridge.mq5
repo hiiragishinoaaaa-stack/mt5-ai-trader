@@ -163,14 +163,35 @@ string JsonEscape(string value)
 //| Minimal hand-rolled JSON value extraction.                       |
 //| The request file has a fixed, flat schema written by our own     |
 //| Python code, so a full JSON parser is not needed.                |
+//|                                                                    |
+//| Whitespace right after the ':' is explicitly skipped, because     |
+//| Python's json.dump() default output includes a space there        |
+//| ("key": value) while a naive compact-JSON assumption ("key":value)|
+//| would otherwise fail to find any value at all.                    |
 //+------------------------------------------------------------------+
+int JsonSkipWhitespace(string json, int pos)
+{
+   int len = StringLen(json);
+   while(pos < len)
+   {
+      ushort c = StringGetCharacter(json, pos);
+      if(c != ' ' && c != '\t' && c != '\r' && c != '\n')
+         break;
+      pos++;
+   }
+   return pos;
+}
+
 string JsonGetStringValue(string json, string key)
 {
-   string pattern = "\"" + key + "\":\"";
+   string pattern = "\"" + key + "\":";
    int pos = StringFind(json, pattern);
    if(pos < 0)
       return "";
-   int start = pos + StringLen(pattern);
+   int start = JsonSkipWhitespace(json, pos + StringLen(pattern));
+   if(StringGetCharacter(json, start) != '"')
+      return "";
+   start++; // skip the opening quote
    int end = StringFind(json, "\"", start);
    if(end < 0)
       return "";
@@ -183,7 +204,7 @@ double JsonGetNumberValue(string json, string key, double default_value)
    int pos = StringFind(json, pattern);
    if(pos < 0)
       return default_value;
-   int start = pos + StringLen(pattern);
+   int start = JsonSkipWhitespace(json, pos + StringLen(pattern));
    int len = StringLen(json);
    int end = start;
    while(end < len)
@@ -205,7 +226,7 @@ bool JsonGetBoolValue(string json, string key, bool default_value)
    int pos = StringFind(json, pattern);
    if(pos < 0)
       return default_value;
-   int start = pos + StringLen(pattern);
+   int start = JsonSkipWhitespace(json, pos + StringLen(pattern));
    if(StringSubstr(json, start, 4) == "true")
       return true;
    if(StringSubstr(json, start, 5) == "false")
