@@ -181,12 +181,28 @@ python main.py --once --debug    # 詳細ログ付きで1回実行
    (ライブ口座だった場合、EAは`InpEnableOrders=true`でも自動的に発注を
    無効化し、「エキスパート」タブに警告を出す)
 
+> **既知の問題**: 一部のブローカー(XM/XMTradingを含む。特に有効期限のない
+> デモ口座)では、MT5ターミナルの画面上は「Demo Account」と表示されて
+> いても、`ACCOUNT_TRADE_MODE`がデモとして正しく報告されないことがある
+> (MQL5公式フォーラムでも報告されている既知の挙動)。この場合、EAは
+> 安全側に倒して発注を無効化し、「エキスパート」タブに
+> `InpConfirmedDemoAccount にこの口座番号を設定してください」という
+> 案内を表示する。本当に自分のデモ口座だと確認できた場合のみ、
+> EAの入力パラメータ `InpConfirmedDemoAccount` にその口座番号(ログインID)
+> を入力することで、`ACCOUNT_TRADE_MODE`の代わりにこの明示的な確認を
+> 発注許可の根拠として使う。**ライブ(実)口座の番号は絶対に入力しないこと。**
+
 ### STEP 6: 発注を有効化する(任意、デモ口座のみ)
 
 1. MT5のチャート上の `ARTEMIS_Bridge` を右クリック→「エキスパートアドバイザの
    プロパティ」を開き、入力パラメータの `InpEnableOrders` を `true` に変更する。
    - `InpMagicNumber`(既定 990101)は、このEAが出した注文を識別するための
      番号。他のEAと衝突しなければ変更不要。
+   - 「エキスパート」タブに `InpEnableOrders is true but this account is
+     NOT recognized as a demo account` と表示された場合、上記の既知の問題
+     に該当している。ログに表示される自分の口座番号(login)を確認した上で、
+     `InpConfirmedDemoAccount` にその番号を入力し、EAをチャートから一度外して
+     再度追加する(プロパティ変更を反映させるため)。
 2. `.env` を開き、以下を設定する。
    ```
    DEMO_ONLY=true
@@ -232,7 +248,7 @@ python main.py --once --debug    # 詳細ログ付きで1回実行
 | 結果メッセージ | 対処 |
 |---|---|
 | `DEMO_ONLY=falseのため発注をスキップします` | `.env`で`DEMO_ONLY=true`を設定 |
-| `rejected: this account is not a demo account` | MT5がライブ口座にログインしている。デモ口座に切り替える |
+| `rejected: this account is not recognized as a demo account` | MT5がライブ口座にログインしているか、`ACCOUNT_TRADE_MODE`の既知の誤判定(上記STEP6の注記を参照)。デモ口座であることを確認できたら`InpConfirmedDemoAccount`を設定する |
 | `rejected: demo_only flag was not true` | 通常発生しない(Python側のバグの可能性)。Issueで報告してほしい |
 | `skipped: a position already exists for this symbol` | 想定通りの動作(仕様どおり重複発注しない) |
 | `%s秒待っても結果を確認できませんでした` | `InpEnableOrders=true`になっているか、EAが稼働しているか確認 |

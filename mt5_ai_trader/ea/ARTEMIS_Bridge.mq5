@@ -55,6 +55,13 @@ input string           InpOrderRequestFile  = "artemis_order_request.json";     
 input string           InpOrderResultFile   = "artemis_order_result.json";        // Order result file written by this EA
 input ulong            InpMagicNumber       = 990101;                             // Magic number used to tag orders placed by this EA
 input int              InpSlippagePoints    = 20;                                 // Allowed slippage (points) for market orders
+// Some brokers (confirmed with XM/XMTrading demo servers, and documented as a
+// known MQL5 issue with non-expiring demo accounts) report ACCOUNT_TRADE_MODE
+// as NOT demo even though the terminal clearly shows "Demo Account". If that
+// happens, set this to your verified demo account login number to allow order
+// execution anyway. Leave at 0 to rely solely on ACCOUNT_TRADE_MODE.
+// NEVER put a real/live account number here.
+input long              InpConfirmedDemoAccount = 0;                               // Manual override: your verified DEMO account login (0 = off)
 
 string g_tmp_file_name;
 bool   g_orders_effectively_enabled = false;
@@ -71,12 +78,20 @@ int OnInit()
       return INIT_FAILED;
    }
 
+   Print("ARTEMIS: account info - login=", AccountInfoInteger(ACCOUNT_LOGIN),
+         " server=", AccountInfoString(ACCOUNT_SERVER),
+         " company=", AccountInfoString(ACCOUNT_COMPANY),
+         " trade_mode=", EnumToString((ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE)));
+
    g_orders_effectively_enabled = InpEnableOrders;
    if(InpEnableOrders && !IsDemoAccount())
    {
       g_orders_effectively_enabled = false;
-      Print("ARTEMIS: WARNING - InpEnableOrders is true but this account is NOT a demo account. "
-            "Order execution is forced OFF for safety.");
+      Print("ARTEMIS: WARNING - InpEnableOrders is true but this account is NOT recognized as a demo "
+            "account. Order execution is forced OFF for safety. If this IS your demo account (some "
+            "brokers, e.g. XM/XMTrading, misreport ACCOUNT_TRADE_MODE for demo accounts), set "
+            "InpConfirmedDemoAccount to this account's login number (", AccountInfoInteger(ACCOUNT_LOGIN),
+            ") to explicitly confirm it and re-add the EA to the chart.");
    }
 
    g_trade.SetExpertMagicNumber(InpMagicNumber);
@@ -103,9 +118,29 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
+//| Whether it is safe to treat the connected account as a demo       |
+//| account for the purpose of allowing automated order execution.    |
+//|                                                                     |
+//| ACCOUNT_TRADE_MODE is the official way to do this, but it is       |
+//| known to misreport some brokers' demo accounts (confirmed with     |
+//| XM/XMTrading, and documented for non-expiring demo accounts in     |
+//| general) as not-demo even though the terminal UI shows             |
+//| "Demo Account". To work around that without weakening the safety   |
+//| guarantee, an explicit user-confirmed account-number override      |
+//| (InpConfirmedDemoAccount) is accepted as a second path: it only     |
+//| takes effect if the trader has deliberately typed their own         |
+//| verified demo account number into the EA's input parameters.       |
+//+------------------------------------------------------------------+
 bool IsDemoAccount()
 {
-   return (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO;
+   if((ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO)
+      return true;
+
+   long current_login = AccountInfoInteger(ACCOUNT_LOGIN);
+   if(InpConfirmedDemoAccount != 0 && current_login == InpConfirmedDemoAccount)
+      return true;
+
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -295,7 +330,10 @@ void ProcessOrderRequest()
    }
    if(!IsDemoAccount())
    {
-      WriteOrderResult(request_id, false, "rejected: this account is not a demo account", 0, 0);
+      WriteOrderResult(request_id, false,
+                        "rejected: this account is not recognized as a demo account "
+                        "(set InpConfirmedDemoAccount if this is actually your demo account)",
+                        0, 0);
       return;
    }
    if(symbol != InpSymbol)
