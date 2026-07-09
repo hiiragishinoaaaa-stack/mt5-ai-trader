@@ -6,6 +6,10 @@ MT5(MetaTrader5)デモ口座 × AI判断 の自動売買BOT MVP。
 Phase 2として「`DEMO_ONLY=true`の場合のみ動作するデモ口座への自動発注」
 に対応した。既定(`DEMO_ONLY`未設定)では発注は一切行われない。**
 
+Web管理画面(UIモック)は`../dashboard/`にある。現時点ではこのPython本体とは
+接続していない、独立したフロントエンドプロジェクト。詳細は
+[`dashboard/README.md`](../dashboard/README.md)を参照。
+
 ## アーキテクチャ
 
 ```
