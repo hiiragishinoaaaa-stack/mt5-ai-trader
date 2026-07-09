@@ -2,23 +2,27 @@
 
 MT5(MetaTrader5)デモ口座 × AI判断 の自動売買BOT MVP。
 
-**現時点のスコープは「データ取得 → 指標計算 → AI判断 → ログ保存」までであり、
-実際の発注(注文執行)は行わない。**
+**Phase 1(データ取得 → 指標計算 → AI判断 → ログ保存)に加え、
+Phase 2として「`DEMO_ONLY=true`の場合のみ動作するデモ口座への自動発注」
+に対応した。既定(`DEMO_ONLY`未設定)では発注は一切行われない。**
 
 ## アーキテクチャ
 
 ```
 mt5_ai_trader/
-  config.py       設定値(.env読み込み)。他モジュールは全てここを参照する。
-  market_feed.py  EAが書き出すJSONファイルを読み、価格データを取得する。
+  config.py         設定値(.env読み込み)。他モジュールは全てここを参照する。
+  market_feed.py    EAが書き出す価格データJSONを読む(Phase 1)。
+  order_executor.py AIのBUY/SELL判断から発注リクエストJSONを書き出す(Phase 2)。
   ea/
-    ARTEMIS_MarketFeed.mq5   MT5上で動くEA。ティック・ローソク足をJSONへ書き出す。
-  indicators.py   EMA / RSI / MACD の計算(純粋関数、MT5非依存)。
-  ai_engine.py    売買判断ロジック。AIEngineインターフェースの背後に隠蔽。
-  logger.py       コンソール + logs/trades.log へのロギング設定。
-  main.py         上記を組み合わせるエントリーポイント。
-  tests/          indicators.py / market_feed.py 等の単体テスト(MT5接続不要)。
-  logs/           実行ログの出力先。
+    ARTEMIS_Bridge.mq5   MT5上で動くEA。価格データの書き出しと、
+                         発注リクエストの読み取り・実行(order_send)を行う。
+  indicators.py     EMA / RSI / MACD の計算(純粋関数、MT5非依存)。
+  ai_engine.py      売買判断ロジック。AIEngineインターフェースの背後に隠蔽。
+  logger.py         コンソール + logs/trades.log へのロギング設定。
+  main.py           上記を組み合わせるエントリーポイント。
+  tests/            indicators.py / market_feed.py / order_executor.py 等の
+                    単体テスト(MT5接続不要)。
+  logs/             実行ログの出力先。
 ```
 
 モジュール間の依存方向は一方向(`main.py` → 各モジュール)になっており、
@@ -32,10 +36,16 @@ mt5_ai_trader/
 原因はPython側のコードではなくMT5とPython間のIPC層にあると判断し、
 MT5 Python APIに一切依存しない構成に切り替えている。
 
-代わりに、MT5ターミナル上で動くEA(`ea/ARTEMIS_MarketFeed.mq5`)が
+代わりに、MT5ターミナル上で動くEA(`ea/ARTEMIS_Bridge.mq5`)が
 ティック・ローソク足データを定期的にJSONファイルへ書き出し、Python側
 (`market_feed.py`)はそのファイルを読むだけにする。ファイルの読み込みは
 ローカルディスクI/Oのため、IPC通信のようにハングする心配がない。
+
+Phase 2の発注も同じ考え方で、Pythonは発注リクエストをJSONファイルへ
+書き出すだけで、実際の`order_send`(MQL5では`CTrade`経由)はEA側で行う。
+Python側はMT5の口座状態(残高やポジション)を一切知り得ないため、
+「本当にデモ口座か」「既に同じ通貨のポジションを持っていないか」の
+最終確認は必ずEA側(ブローカーに直接接続している側)で行う設計にしている。
 
 > **注意(`.mq5`ファイルを編集する場合)**: `ea/`配下の`.mq5`ファイルは
 > 非ASCII文字(日本語等)を含めないこと。日本語コメントを含むMQL5
@@ -67,16 +77,20 @@ MT5 Python APIに一切依存しない構成に切り替えている。
 2. MT5のメニューから「ファイル」→「データフォルダを開く」を選ぶ。
    エクスプローラーが開く。
 3. 開いたフォルダの中の `MQL5\Experts` フォルダに、このリポジトリの
-   `mt5_ai_trader\ea\ARTEMIS_MarketFeed.mq5` をコピーする。
+   `mt5_ai_trader\ea\ARTEMIS_Bridge.mq5` をコピーする。
+   - 以前のバージョン(`ARTEMIS_MarketFeed.mq5`)を既にチャートに追加
+     済みの場合は、先にチャートから外し(EA名を右クリック→「削除」)、
+     `MQL5\Experts`フォルダの古いファイルも削除してから、新しい
+     `ARTEMIS_Bridge.mq5`を配置すること。
 4. MT5に戻り、「表示」→「ナビゲーター」(Ctrl+N)を開く。
    「エキスパートアドバイザ」の一覧を右クリック →「更新」すると
-   `ARTEMIS_MarketFeed` が表示される。
+   `ARTEMIS_Bridge` が表示される。
 5. MT5上部ツールバーの「アルゴ取引」ボタンが**緑色で有効**になっていることを
    確認する(灰色の場合はクリックして有効にする)。
 
 ### STEP 2: EAをチャートにコンパイル・適用する
 
-1. ナビゲーターの `ARTEMIS_MarketFeed` をダブルクリックすると、
+1. ナビゲーターの `ARTEMIS_Bridge` をダブルクリックすると、
    自動的にMetaEditorが開きコンパイルされる(初回のみ)。
    MetaEditorのツールバーの「コンパイル」ボタンを押し、エラーが
    0件であることを確認する。
@@ -88,14 +102,16 @@ MT5 Python APIに一切依存しない構成に切り替えている。
      開いて保存し直したりしない)こと。
 2. MT5に戻り、USDJPYのチャートを開く(なければ「ファイル」→「新規チャート」
    →「USDJPY」)。時間足は `.env` の `TIMEFRAME` と合わせる(既定は M15)。
-3. ナビゲーターの `ARTEMIS_MarketFeed` をチャート上にドラッグ&ドロップする。
+3. ナビゲーターの `ARTEMIS_Bridge` をチャート上にドラッグ&ドロップする。
 4. 表示される設定ダイアログの「全般」タブで「アルゴ取引を許可する」に
-   チェックを入れて「OK」を押す。
+   チェックを入れて「OK」を押す(**Phase 1(価格取得)だけを試す間は
+   `InpEnableOrders` は既定の `false` のままにしておくこと**。発注を
+   試す手順はSTEP 6を参照)。
    - `InpSymbol` (既定 USDJPY)・`InpTimeframe` (既定 M15) は、
      `.env` の `SYMBOL` / `TIMEFRAME` と必ず一致させること。
 5. チャート右上にスマイルアイコン(EA稼働中の印)が出ていればOK。
    「エキスパート」タブ(ターミナル下部のログ)に
-   `ARTEMIS: 稼働開始。...` と表示されていることを確認する。
+   `ARTEMIS: started. ...` と表示されていることを確認する。
 
 ### STEP 3: ファイルが書き出されているか確認する
 
@@ -142,7 +158,7 @@ python main.py --once --debug    # 詳細ログ付きで1回実行
 
 判断結果はコンソールと `logs/trades.log` の両方に出力される。
 
-### うまくいかない場合
+### うまくいかない場合(Phase 1: 価格取得)
 
 | エラーメッセージ | 対処 |
 |---|---|
@@ -153,11 +169,80 @@ python main.py --once --debug    # 詳細ログ付きで1回実行
 いずれもファイルI/Oのみで判定しているため、以前のMT5 Python API方式で
 発生していた「原因不明のまま無応答で固まる」ことは構造上発生しない。
 
+## Phase 2: デモ口座への自動発注
+
+**必ずデモ口座で試すこと。ライブ(実)口座では絶対に有効化しないこと。**
+安全のため、発注は以下の二重のロックがかかっている。いずれか一方でも
+満たさなければ発注は実行されない。
+
+1. Python側: `.env` の `DEMO_ONLY=true`(既定は未設定=false=発注しない)
+2. EA側: `InpEnableOrders=true`、かつMT5が実際にデモ口座へログインして
+   いることをEAが`AccountInfoInteger(ACCOUNT_TRADE_MODE)`で確認できること
+   (ライブ口座だった場合、EAは`InpEnableOrders=true`でも自動的に発注を
+   無効化し、「エキスパート」タブに警告を出す)
+
+### STEP 6: 発注を有効化する(任意、デモ口座のみ)
+
+1. MT5のチャート上の `ARTEMIS_Bridge` を右クリック→「エキスパートアドバイザの
+   プロパティ」を開き、入力パラメータの `InpEnableOrders` を `true` に変更する。
+   - `InpMagicNumber`(既定 990101)は、このEAが出した注文を識別するための
+     番号。他のEAと衝突しなければ変更不要。
+2. `.env` を開き、以下を設定する。
+   ```
+   DEMO_ONLY=true
+   ORDER_VOLUME=0.01
+   SL_POINTS=200
+   TP_POINTS=400
+   ```
+   - `ORDER_VOLUME` はロット数(既定0.01固定)。
+   - `SL_POINTS` / `TP_POINTS` はシンボルの最小価格単位(point)基準の
+     ストップロス/テイクプロフィット距離。USDJPY(3桁表示)であれば
+     200point ≒ 20pips、400point ≒ 40pips に相当する。
+3. `python main.py --once --debug` を実行し、BUY/SELLが出た場合に
+   以下のようなログが出ることを確認する。
+   ```
+   order_executor: 発注リクエストを送出しました request_id=...
+   order_executor: 発注に成功しました request_id=... ticket=12345678 ...
+   ```
+4. MT5の「取引」タブでポジションが実際に開いたこと、SL/TPが設定されて
+   いることを確認する。
+
+### 動作の仕組み
+
+- `main.py`はAIがBUY/SELLと判断した場合のみ、`order_executor.py`が
+  発注リクエスト(`artemis_order_request.json`)を書き出す。WAITの場合は
+  何もしない。
+- EA(`ARTEMIS_Bridge.mq5`)はタイマーごとにこのファイルを確認し、
+  存在すれば読み取って即座に削除する(1回のリクエストを二重処理しない
+  ため)。その後、以下を順に確認し、いずれかに該当すれば発注せず
+  理由を結果ファイルに書く。
+  1. リクエストの`demo_only`がtrueか
+  2. 接続中の口座が本当にデモ口座か
+  3. リクエストのシンボルがEAの`InpSymbol`と一致するか
+  4. 同じシンボルの既存ポジションが無いか(あれば発注をスキップする)
+- 全てクリアした場合のみ`CTrade`経由で成行注文(SL/TP付き)を送信し、
+  成功/失敗を結果ファイル(`artemis_order_result.json`)に書き出す。
+- Pythonはこの結果ファイルを最大`ORDER_RESULT_WAIT_SECONDS`秒
+  (既定10秒)待って読み取り、成功/失敗を`logs/trades.log`に記録する。
+  待っても結果が確認できない場合も例外にはせず、警告ログを出して
+  次のサイクルへ進む。
+
+### うまくいかない場合(Phase 2: 発注)
+
+| 結果メッセージ | 対処 |
+|---|---|
+| `DEMO_ONLY=falseのため発注をスキップします` | `.env`で`DEMO_ONLY=true`を設定 |
+| `rejected: this account is not a demo account` | MT5がライブ口座にログインしている。デモ口座に切り替える |
+| `rejected: demo_only flag was not true` | 通常発生しない(Python側のバグの可能性)。Issueで報告してほしい |
+| `skipped: a position already exists for this symbol` | 想定通りの動作(仕様どおり重複発注しない) |
+| `%s秒待っても結果を確認できませんでした` | `InpEnableOrders=true`になっているか、EAが稼働しているか確認 |
+
 ## テスト(Windows以外でも実行可能)
 
-`indicators.py` や `ai_engine.py`、`market_feed.py` はいずれもMT5に
-依存しない純粋なロジック・ファイルI/Oのため、MT5環境がなくても
-単体テストを実行できる。
+`indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`
+はいずれもMT5に依存しない純粋なロジック・ファイルI/Oのため、MT5環境が
+なくても単体テストを実行できる(`order_executor.py`のテストは、EAの
+代わりに結果ファイルを書き出す疑似コードでEAとのやり取りを再現している)。
 
 ```
 pip install -r requirements-dev.txt
@@ -166,7 +251,16 @@ pytest
 
 ## 免責事項
 
-本MVPはデモ口座での動作確認・研究目的のものであり、実口座での自動発注は
-一切行わない。将来的に発注機能を追加する場合も、リスク管理(ロット計算、
-損切り、最大ドローダウン制御など)を別モジュールとして設計・実装した上で、
-十分なバックテスト・デモ運用を経てから有効化すること。
+本プロジェクトはデモ口座での動作確認・研究目的のものであり、実口座
+(ライブ口座)での自動発注は想定していない。Phase 2の発注機能は
+`DEMO_ONLY=true`かつEA側の`InpEnableOrders=true`かつ実際にデモ口座へ
+ログインしている場合のみ動作するよう二重にロックしているが、これは
+「事故的にライブ口座で発注してしまうリスクを下げる」ためのものであり、
+デモ口座であっても発注に伴う挙動(約定・SL/TP設定など)に不具合が
+無いことを保証するものではない。
+
+ロットは0.01固定、SL/TPは`SL_POINTS`/`TP_POINTS`で設定される以外の
+リスク管理(最大ポジション数、最大ドローダウン制御、資金管理など)は
+実装していない。将来ライブ口座での運用を検討する場合は、それらを
+別モジュールとして設計・実装した上で、十分なバックテスト・長期の
+デモ運用を経てから判断すること。
