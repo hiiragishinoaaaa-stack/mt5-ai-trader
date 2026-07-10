@@ -19,6 +19,7 @@ from ai_engine import Signal
 def _patch_order_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ORDER_REQUEST_FILE_PATH", tmp_path / "artemis_order_request.json")
     monkeypatch.setattr(config, "ORDER_RESULT_FILE_PATH", tmp_path / "artemis_order_result.json")
+    monkeypatch.setattr(config, "ENABLE_ORDERS", True)
     monkeypatch.setattr(config, "DEMO_ONLY", True)
     monkeypatch.setattr(config, "ORDER_VOLUME", 0.01)
     monkeypatch.setattr(config, "SL_POINTS", 200)
@@ -53,6 +54,16 @@ def test_wait_signal_does_not_write_request():
 
 def test_demo_only_false_does_not_write_request(monkeypatch):
     monkeypatch.setattr(config, "DEMO_ONLY", False)
+    executor = order_executor.FileOrderExecutor()
+
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+
+    assert result is None
+    assert not config.ORDER_REQUEST_FILE_PATH.exists()
+
+
+def test_enable_orders_false_does_not_write_request(monkeypatch):
+    monkeypatch.setattr(config, "ENABLE_ORDERS", False)
     executor = order_executor.FileOrderExecutor()
 
     result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))

@@ -87,26 +87,37 @@ export function NumberField({
   onChange,
   step = 1,
   suffix,
+  error,
+  disabled,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
   step?: number;
   suffix?: string;
+  error?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="flex flex-col gap-1.5 py-3 first:pt-0 last:pb-0">
       <span className="text-[11px] uppercase tracking-wide text-ink-faint">{label}</span>
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2.5">
+      <div
+        className={`flex items-center gap-2 rounded-lg border bg-surface-2 px-3 py-2.5 ${
+          error ? "border-loss" : "border-border"
+        }`}
+      >
         <input
           type="number"
+          inputMode="decimal"
           step={step}
-          value={value}
-          onChange={(event) => onChange(Number(event.target.value))}
-          className="w-full bg-transparent text-sm text-ink outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          value={Number.isNaN(value) ? "" : value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.valueAsNumber)}
+          className="w-full bg-transparent text-sm text-ink outline-none disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
         {suffix ? <span className="shrink-0 text-xs text-ink-faint">{suffix}</span> : null}
       </div>
+      {error ? <span className="text-xs text-loss">{error}</span> : null}
     </label>
   );
 }
@@ -116,11 +127,13 @@ export function PillGroup<T extends string>({
   options,
   value,
   onChange,
+  disabled,
 }: {
   label: string;
   options: { value: T; label: string; disabled?: boolean }[];
   value: T;
   onChange: (value: T) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5 py-3 first:pt-0 last:pb-0">
@@ -130,9 +143,9 @@ export function PillGroup<T extends string>({
           <button
             key={opt.value}
             type="button"
-            disabled={opt.disabled}
+            disabled={disabled || opt.disabled}
             onClick={() => onChange(opt.value)}
-            className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-40 ${
+            className={`flex-1 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-40 ${
               value === opt.value ? "border-ink bg-ink text-page" : "border-border-strong bg-surface-2 text-ink-dim"
             }`}
           >

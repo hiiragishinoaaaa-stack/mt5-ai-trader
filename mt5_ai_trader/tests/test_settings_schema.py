@@ -1,0 +1,181 @@
+"""settings_schema.py の単体テスト。MT5/EA/実サーバー不要。"""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+import config
+import settings_schema
+
+
+@pytest.fixture(autouse=True)
+def _patch_config_json_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_JSON_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(config, "RSI_OVERBOUGHT", 70.0)
+    monkeypatch.setattr(config, "RSI_OVERSOLD", 30.0)
+    monkeypatch.setattr(config, "EMA_FAST_PERIOD", 9)
+    monkeypatch.setattr(config, "EMA_SLOW_PERIOD", 21)
+
+
+# --- validate: 正常系 -------------------------------------------------------
+
+
+def test_validate_accepts_all_valid_fields():
+    payload = {
+        "ORDER_VOLUME": 0.05,
+        "SL_POINTS": 150,
+        "TP_POINTS": 300,
+        "TIMEFRAME": "H1",
+        "LOOP_INTERVAL_SECONDS": 30,
+        "RSI_OVERBOUGHT": 72.0,
+        "RSI_OVERSOLD": 28.0,
+        "EMA_FAST_PERIOD": 5,
+        "EMA_SLOW_PERIOD": 20,
+        "ENABLE_ORDERS": True,
+        "DEMO_ONLY": True,
+    }
+
+    cleaned, errors = settings_schema.validate(payload)
+
+    assert errors == {}
+    assert cleaned["ORDER_VOLUME"] == 0.05
+    assert cleaned["TIMEFRAME"] == "H1"
+    assert cleaned["ENABLE_ORDERS"] is True
+
+
+def test_validate_ignores_unknown_keys():
+    cleaned, errors = settings_schema.validate({"SOME_FUTURE_FIELD": 123, "ORDER_VOLUME": 0.02})
+
+    assert errors == {}
+    assert "SOME_FUTURE_FIELD" not in cleaned
+    assert cleaned["ORDER_VOLUME"] == 0.02
+
+
+# --- validate: 型・範囲チェック ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ORDER_VOLUME": 0.0},  # min未満
+        {"ORDER_VOLUME": 1000.0},  # max超過
+        {"SL_POINTS": -1},
+        {"TP_POINTS": -1},
+        {"LOOP_INTERVAL_SECONDS": 1},  # min未満(5秒未満)
+        {"LOOP_INTERVAL_SECONDS": 999999},  # max超過
+        {"RSI_OVERBOUGHT": 10.0},  # min(50)未満
+        {"RSI_OVERSOLD": 60.0},  # max(50)超過
+        {"EMA_FAST_PERIOD": 0},  # min未満
+        {"EMA_SLOW_PERIOD": 1},  # min(2)未満
+    ],
+)
+def test_validate_rejects_out_of_range_values(payload):
+    cleaned, errors = settings_schema.validate(payload)
+
+    key = next(iter(payload))
+    assert key in errors
+    assert key not in cleaned
+
+
+def test_validate_rejects_invalid_timeframe_choice():
+    cleaned, errors = settings_schema.validate({"TIMEFRAME": "M2"})
+
+    assert "TIMEFRAME" in errors
+    assert "TIMEFRAME" not in cleaned
+
+
+def test_validate_rejects_invalid_entry_strictness_choice():
+    cleaned, errors = settings_schema.validate({"ENTRY_STRICTNESS": "extreme"})
+
+    assert "ENTRY_STRICTNESS" in errors
+
+
+def test_validate_rejects_wrong_type():
+    cleaned, errors = settings_schema.validate({"ORDER_VOLUME": "not-a-number"})
+
+    assert "ORDER_VOLUME" in errors
+
+
+def test_validate_rejects_bool_for_numeric_field():
+    """PythonではTrue/Falseがintのサブクラスなので、意図しない誤入力を防ぐため明示的に拒否する。"""
+    cleaned, errors = settings_schema.validate({"SL_POINTS": True})
+
+    assert "SL_POINTS" in errors
+
+
+# --- validate: RSI/EMAの相互関係チェック -------------------------------------
+
+
+def test_validate_rejects_rsi_overbought_not_greater_than_oversold():
+    # 両方とも単体の範囲チェック(overbought:50-100 / oversold:0-50)は通るが、
+    # overbought(50) <= oversold(50) となり相互関係チェックで弾かれるケース。
+    cleaned, errors = settings_schema.validate({"RSI_OVERBOUGHT": 50.0, "RSI_OVERSOLD": 50.0})
+
+    assert "RSI_OVERBOUGHT" in errors
+    assert "RSI_OVERBOUGHT" not in cleaned
+    assert "RSI_OVERSOLD" not in cleaned
+
+
+def test_validate_rsi_overbought_checked_against_existing_config_value():
+    """片方だけ送られてきた場合、既存のconfig値と突き合わせて矛盾を検出する。"""
+    # 既存(fixtureで固定): RSI_OVERSOLD=30.0。overbought=25はそれより小さく矛盾。
+    cleaned, errors = settings_schema.validate({"RSI_OVERBOUGHT": 25.0})
+
+    assert "RSI_OVERBOUGHT" in errors
+
+
+def test_validate_rejects_ema_fast_not_less_than_slow():
+    cleaned, errors = settings_schema.validate({"EMA_FAST_PERIOD": 30, "EMA_SLOW_PERIOD": 10})
+
+    assert "EMA_FAST_PERIOD" in errors
+    assert "EMA_FAST_PERIOD" not in cleaned
+    assert "EMA_SLOW_PERIOD" not in cleaned
+
+
+# --- Entry Strictness ---------------------------------------------------------
+
+
+def test_entry_strictness_populates_rsi_thresholds_when_not_explicit():
+    cleaned, errors = settings_schema.validate({"ENTRY_STRICTNESS": "aggressive"})
+
+    assert errors == {}
+    assert cleaned["ENTRY_STRICTNESS"] == "aggressive"
+    preset = settings_schema.ENTRY_STRICTNESS_PRESETS["aggressive"]
+    assert cleaned["RSI_OVERBOUGHT"] == preset["RSI_OVERBOUGHT"]
+    assert cleaned["RSI_OVERSOLD"] == preset["RSI_OVERSOLD"]
+
+
+def test_entry_strictness_does_not_override_explicit_rsi_values():
+    cleaned, errors = settings_schema.validate(
+        {"ENTRY_STRICTNESS": "aggressive", "RSI_OVERBOUGHT": 90.0, "RSI_OVERSOLD": 10.0}
+    )
+
+    assert errors == {}
+    assert cleaned["RSI_OVERBOUGHT"] == 90.0
+    assert cleaned["RSI_OVERSOLD"] == 10.0
+
+
+# --- save / current_settings --------------------------------------------------
+
+
+def test_save_creates_config_json_and_current_settings_reflects_it():
+    settings_schema.save({"ORDER_VOLUME": 0.03, "ENABLE_ORDERS": True})
+
+    assert config.CONFIG_JSON_PATH.exists()
+    on_disk = json.loads(config.CONFIG_JSON_PATH.read_text(encoding="utf-8"))
+    assert on_disk["ORDER_VOLUME"] == 0.03
+    assert on_disk["ENABLE_ORDERS"] is True
+
+    current = settings_schema.current_settings()
+    assert current["ORDER_VOLUME"] == 0.03
+    assert current["ENABLE_ORDERS"] is True
+
+
+def test_save_merges_with_existing_config_json_without_dropping_fields():
+    settings_schema.save({"ORDER_VOLUME": 0.02})
+    settings_schema.save({"SL_POINTS": 250})
+
+    on_disk = json.loads(config.CONFIG_JSON_PATH.read_text(encoding="utf-8"))
+    assert on_disk["ORDER_VOLUME"] == 0.02  # 1回目の値が保持されている
+    assert on_disk["SL_POINTS"] == 250

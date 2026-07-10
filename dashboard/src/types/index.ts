@@ -85,6 +85,31 @@ export interface AnalyticsSummary {
   totalTrades: number;
 }
 
+// --- 実際にPython側(config.json)へ反映される売買設定 -----------------------
+// settings_schema.py(Python)のFIELDSと1:1で対応する。フィールドを追加・
+// 変更する場合はPython側と両方直すこと。
+
+export type Timeframe = "M1" | "M5" | "M15" | "M30" | "H1" | "H4" | "D1";
+
+export type EntryStrictness = "conservative" | "balanced" | "aggressive";
+
+export interface TradingSettings {
+  ORDER_VOLUME: number;
+  SL_POINTS: number;
+  TP_POINTS: number;
+  TIMEFRAME: Timeframe;
+  LOOP_INTERVAL_SECONDS: number;
+  RSI_OVERBOUGHT: number;
+  RSI_OVERSOLD: number;
+  EMA_FAST_PERIOD: number;
+  EMA_SLOW_PERIOD: number;
+  ENTRY_STRICTNESS: EntryStrictness;
+  ENABLE_ORDERS: boolean;
+  DEMO_ONLY: boolean;
+}
+
+// --- ここから下はまだUIモックの設定(バックエンドと未接続) -------------------
+
 export interface DiscordSettings {
   enabled: boolean;
   webhookUrl: string;
@@ -100,31 +125,22 @@ export interface VpsSettings {
 }
 
 export interface AiSettings {
+  // riskLevel/autoTradeEnabledはTradingSettings(ENTRY_STRICTNESS/ENABLE_ORDERS)
+  // に置き換わったため、ここにはまだ実バックエンドが無いエンジン選択のみ残す。
   engine: "rule_based" | "openai" | "claude";
-  riskLevel: "low" | "medium" | "high";
-  autoTradeEnabled: boolean;
-}
-
-export interface RiskSettings {
-  lotSize: number;
-  maxDailyLossPercent: number;
-  maxPositions: number;
-  slPoints: number;
-  tpPoints: number;
 }
 
 export interface Mt5Settings {
+  // server/accountLogin/symbolはまだ読み取り専用の参考表示(未接続)。
+  // timeframe/demoOnlyはTradingSettingsへ移動した(実際に反映される)。
   server: string;
   accountLogin: string;
   symbol: string;
-  timeframe: string;
-  demoOnly: boolean;
 }
 
 export interface SettingsState {
   discord: DiscordSettings;
   vps: VpsSettings;
   ai: AiSettings;
-  risk: RiskSettings;
   mt5: Mt5Settings;
 }

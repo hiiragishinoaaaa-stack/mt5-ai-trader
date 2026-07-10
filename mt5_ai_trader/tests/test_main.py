@@ -10,6 +10,32 @@ import main as main_module
 from ai_engine import Signal
 
 
+# --- resolve_loop_interval ---------------------------------------------------
+
+
+def test_resolve_loop_interval_prefers_explicit_cli_value(monkeypatch):
+    monkeypatch.setattr(config, "LOOP_INTERVAL_SECONDS", 60)
+
+    assert main_module.resolve_loop_interval(15) == 15
+
+
+def test_resolve_loop_interval_falls_back_to_config_when_cli_omitted(monkeypatch):
+    monkeypatch.setattr(config, "LOOP_INTERVAL_SECONDS", 45)
+
+    assert main_module.resolve_loop_interval(None) == 45
+
+
+def test_resolve_loop_interval_reflects_config_json_style_change(monkeypatch):
+    """config.LOOP_INTERVAL_SECONDSが実行中に変わった場合(Dashboard経由を模す)、
+    --interval未指定なら次回呼び出しで新しい値がすぐ反映されることを確認する。
+    """
+    monkeypatch.setattr(config, "LOOP_INTERVAL_SECONDS", 60)
+    assert main_module.resolve_loop_interval(None) == 60
+
+    monkeypatch.setattr(config, "LOOP_INTERVAL_SECONDS", 10)
+    assert main_module.resolve_loop_interval(None) == 10
+
+
 # --- resolve_force_signal ---------------------------------------------------
 
 
@@ -136,3 +162,17 @@ def test_run_once_without_force_signal_keeps_normal_ai_decision(monkeypatch):
     assert signal.action == "WAIT"  # 通常運転: FakeAiEngineの判断がそのまま使われる
     # WAITなのでorder_executorへは渡るが、submit_if_needed内部でBUY/SELL以外は無視される
     assert order_executor.calls[0][0].action == "WAIT"
+
+
+def test_run_once_reloads_config_json_at_start(monkeypatch):
+    """Dashboardからのconfig.json変更をサイクルの先頭で拾えることを確認する。"""
+    calls = []
+    monkeypatch.setattr(config, "load_config_json", lambda **kwargs: calls.append(kwargs) or True)
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert len(calls) == 1

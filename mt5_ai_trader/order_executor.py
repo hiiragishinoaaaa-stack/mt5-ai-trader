@@ -78,6 +78,13 @@ class FileOrderExecutor:
         if signal.action not in ("BUY", "SELL"):
             return None
 
+        if not config.ENABLE_ORDERS:
+            logger.info(
+                "order_executor: ENABLE_ORDERS=falseのため発注をスキップします"
+                "(Dashboard SettingsまたはREADMEを参照し有効化できます)"
+            )
+            return None
+
         if not config.DEMO_ONLY:
             logger.info(
                 "order_executor: DEMO_ONLY=falseのため発注をスキップします"

@@ -185,21 +185,10 @@ export const mockSettings: SettingsState = {
   },
   ai: {
     engine: "rule_based",
-    riskLevel: "medium",
-    autoTradeEnabled: false,
-  },
-  risk: {
-    lotSize: 0.01,
-    maxDailyLossPercent: 5,
-    maxPositions: 1,
-    slPoints: 200,
-    tpPoints: 400,
   },
   mt5: {
     server: "XMTrading-MT53",
     accountLogin: "75575711",
     symbol: "USDJPY",
-    timeframe: "M15",
-    demoOnly: true,
   },
 };

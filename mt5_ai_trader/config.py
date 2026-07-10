@@ -2,12 +2,24 @@
 
 MT5の接続情報やインジケーター・AIエンジンなどのパラメータを環境変数(.env)
 から読み込む。値が未設定の場合はデフォルト値を使用する。
-設定を変更したい場合はこのファイル、または .env を編集すればよく、
-他のモジュールを直接触る必要はない。
+
+一部の売買設定(settings_schema.FIELDSを参照)は、.envに加えて
+config.json でも上書きできる。config.json は Dashboard の Settings画面
+(settings_server.py経由)から書き込まれることを想定した設定ファイルで、
+.envとは異なりGit管理対象外・実行中に書き換え可能なもの。読み込み優先度は
+「config.json > .env > コード上のデフォルト値」。
+
+起動時に一度、load_config_json()が自動的に呼ばれる。実行中にconfig.jsonが
+更新された場合に反映するには、main.pyが各サイクルの先頭で
+load_config_json()を呼び直す(ファイルの更新日時が変わっていなければ
+何もしない、軽量なチェック)。
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,6 +27,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# config.py自身がロガーを使うのはload_config_json()内のみ。setup_logger()が
+# 呼ばれる前(起動直後のimport時)にも安全に使えるよう、標準のlogging APIを
+# そのまま使う(ハンドラ未設定でも例外にはならず、通常は何も出力されないだけ)。
+_logger = logging.getLogger("mt5_ai_trader")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -65,8 +82,12 @@ MARKET_DATA_FILE_PATH = (
 MARKET_DATA_MAX_STALENESS_SECONDS = _env_int("MARKET_DATA_MAX_STALENESS_SECONDS", 30)
 
 # --- 発注(Phase2) ---
-# DEMO_ONLYが明示的にtrueの場合のみ発注リクエストを書き出す(既定でOFF)。
-# EA側でも別途、口座がデモかどうかを必ず再検証する(二重の安全装置)。
+# ENABLE_ORDERSとDEMO_ONLYの両方が明示的にtrueの場合のみ発注リクエストを
+# 書き出す(既定はどちらもfalse)。ENABLE_ORDERSは「発注そのものを行うか」、
+# DEMO_ONLYは「対象口座がデモであること」を表す独立した設定で、Dashboardの
+# Settings画面では別々のトグルとして扱う。EA側でも別途、口座が本当に
+# デモかどうかを再検証する(多重の安全装置)。
+ENABLE_ORDERS = _env_bool("ENABLE_ORDERS", False)
 DEMO_ONLY = _env_bool("DEMO_ONLY", False)
 ORDER_VOLUME = _env_float("ORDER_VOLUME", 0.01)
 # SL/TPは価格ではなく「ポイント数」で指定し、EA側で実際の価格に変換する
@@ -112,6 +133,11 @@ RSI_OVERSOLD = _env_float("RSI_OVERSOLD", 30.0)
 MACD_FAST_PERIOD = _env_int("MACD_FAST_PERIOD", 12)
 MACD_SLOW_PERIOD = _env_int("MACD_SLOW_PERIOD", 26)
 MACD_SIGNAL_PERIOD = _env_int("MACD_SIGNAL_PERIOD", 9)
+# エントリーの厳しさのプリセット名(conservative/balanced/aggressive)。
+# 数値としての効果はRSI_OVERBOUGHT/RSI_OVERSOLDに反映される
+# (settings_schema.ENTRY_STRICTNESS_PRESETSを参照)。この値自体は
+# ai_engine.pyの判断ロジックには使われず、Dashboard表示用の記録値。
+ENTRY_STRICTNESS = os.getenv("ENTRY_STRICTNESS", "balanced")
 
 # --- AI判断エンジン ---
 # "rule_based" が現在の唯一の実装。"openai" / "claude" は将来の拡張ポイント。
@@ -124,3 +150,85 @@ LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 60)
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "trades.log"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# --- Dashboard設定API(settings_server.py) ---
+_config_json_path_env = os.getenv("CONFIG_JSON_PATH")
+CONFIG_JSON_PATH = Path(_config_json_path_env) if _config_json_path_env else BASE_DIR / "config.json"
+# Dashboard(スマホ含む)からアクセスできるよう既定で全インターフェースに
+# 待受する。ローカルの信頼できるネットワーク以外には公開しないこと
+# (settings_server.pyには認証機能が無い。SETTINGS_API_TOKENで簡易保護は可能)。
+SETTINGS_SERVER_HOST = os.getenv("SETTINGS_SERVER_HOST", "0.0.0.0")
+SETTINGS_SERVER_PORT = _env_int("SETTINGS_SERVER_PORT", 8787)
+# 設定した場合、settings_server.pyへのリクエストに
+# `Authorization: Bearer <token>` ヘッダーが必須になる(任意の追加防御)。
+SETTINGS_API_TOKEN = os.getenv("SETTINGS_API_TOKEN", "")
+
+
+def _apply_overrides(overrides: dict) -> None:
+    """overridesの中身をこのモジュールの対応する属性へ反映する。
+
+    settings_schema.FIELDSに定義されたキーのみを対象とする。値の型が
+    想定と異なる場合はそのキーだけスキップし、他の項目には影響しない
+    (config.jsonが手動編集で壊れていてもBOT全体を落とさないため)。
+    循環import回避のため、settings_schemaはここで遅延importする
+    (settings_schema.py 側がconfig.pyをimportしているため)。
+    """
+    import settings_schema  # 遅延import(循環import回避)
+
+    module = sys.modules[__name__]
+    for key, value in overrides.items():
+        spec = settings_schema.FIELDS.get(key)
+        if spec is None:
+            continue
+        try:
+            coerced = settings_schema.coerce(value, spec)
+        except (TypeError, ValueError):
+            _logger.warning(
+                "config: config.jsonの%sの値(%r)が不正な型のため無視します", key, value
+            )
+            continue
+        setattr(module, key, coerced)
+
+
+_config_json_mtime: float | None = None
+
+
+def load_config_json(*, force: bool = False) -> bool:
+    """config.jsonが存在すれば読み込み、対応するモジュール属性を上書きする。
+
+    起動時に自動で1回呼ばれる(本ファイル末尾)ほか、main.pyが実行中の各
+    サイクルでも呼び出し、Dashboardからの設定変更を反映する。ファイルの
+    更新日時が前回と変わっていなければ何もしない(force=Trueで強制再読込)。
+    戻り値: 実際に(再)読込を行ったかどうか。
+    """
+    global _config_json_mtime
+
+    if not CONFIG_JSON_PATH.exists():
+        return False
+
+    try:
+        mtime = CONFIG_JSON_PATH.stat().st_mtime
+    except OSError:
+        return False
+
+    if not force and mtime == _config_json_mtime:
+        return False
+
+    try:
+        with CONFIG_JSON_PATH.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning("config: config.jsonの読み込みに失敗しました: %s", exc)
+        return False
+
+    if not isinstance(raw, dict):
+        _logger.warning("config: config.jsonの中身がオブジェクトではありません(無視します)")
+        return False
+
+    _apply_overrides(raw)
+    _config_json_mtime = mtime
+    return True
+
+
+# 起動時に1回、既存のconfig.jsonがあれば読み込んで反映しておく。
+load_config_json(force=True)

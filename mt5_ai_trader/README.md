@@ -286,11 +286,86 @@ python main.py --debug
 
 | 結果メッセージ | 対処 |
 |---|---|
-| `DEMO_ONLY=falseのため発注をスキップします` | `.env`で`DEMO_ONLY=true`を設定 |
+| `ENABLE_ORDERS=falseのため発注をスキップします` | `.env`またはDashboardの「発注設定」で`ENABLE_ORDERS=true`を設定 |
+| `DEMO_ONLY=falseのため発注をスキップします` | `.env`またはDashboardの「発注設定」で`DEMO_ONLY=true`を設定 |
 | `rejected: this account is not recognized as a demo account` | MT5がライブ口座にログインしているか、`ACCOUNT_TRADE_MODE`の既知の誤判定(上記STEP6の注記を参照)。デモ口座であることを確認できたら`InpConfirmedDemoAccount`を設定する |
 | `rejected: demo_only flag was not true` | 通常発生しない(Python側のバグの可能性)。Issueで報告してほしい |
 | `skipped: a position already exists for this symbol` | 想定通りの動作(仕様どおり重複発注しない) |
 | `%s秒待っても結果を確認できませんでした` | `InpEnableOrders=true`になっているか、EAが稼働しているか確認 |
+
+## Dashboardからの設定変更(settings_server.py)
+
+ARTEMIS X Dashboard(`../dashboard/`)のSettings画面から、コードや`.env`を
+直接編集せずに売買設定を変更できる。`.env`はGit管理・起動時固定の設定、
+`config.json`はDashboardから実行中でも書き換えられる設定、という役割分担。
+読み込み優先度は **config.json > .env > コード上の既定値**。
+
+### 変更できる項目
+
+| 項目 | 意味 | 範囲/選択肢 |
+|---|---|---|
+| `ORDER_VOLUME` | 発注ロット数 | 0.01〜100 |
+| `SL_POINTS` | ストップロス距離(point) | 0〜100000 |
+| `TP_POINTS` | テイクプロフィット距離(point) | 0〜100000 |
+| `TIMEFRAME` | 判断に使う時間足 | M1/M5/M15/M30/H1/H4/D1 |
+| `LOOP_INTERVAL_SECONDS` | 監視ループの間隔(秒) | 5〜86400 |
+| `RSI_OVERBOUGHT` | RSI買われすぎ閾値 | 50〜100 |
+| `RSI_OVERSOLD` | RSI売られすぎ閾値 | 0〜50 |
+| `EMA_FAST_PERIOD` | EMA短期期間 | 1〜500 |
+| `EMA_SLOW_PERIOD` | EMA長期期間 | 2〜1000 |
+| `ENTRY_STRICTNESS` | エントリーの厳しさプリセット | conservative(65/35) / balanced(70/30) / aggressive(80/20)。選択するとRSI_OVERBOUGHT/OVERSOLDに反映される |
+| `ENABLE_ORDERS` | 発注そのものを行うか | true/false |
+| `DEMO_ONLY` | 対象口座がデモであること | true/false |
+
+`RSI_OVERBOUGHT`は`RSI_OVERSOLD`より大きい値、`EMA_FAST_PERIOD`は
+`EMA_SLOW_PERIOD`より小さい値である必要があり、範囲外・矛盾した値は
+保存前に拒否される(`settings_schema.py`)。
+
+**`TIMEFRAME`についての注意**: この値を変えても、EA(`ARTEMIS_Bridge.mq5`)
+が実際に取得するローソク足の時間軸は自動的には変わらない。EA側の
+`InpTimeframe`もMT5上で合わせて変更すること。
+
+### STEP 7: settings_server.pyを起動する
+
+```
+python settings_server.py
+```
+
+`main.py`(トレードのメインループ)とは別プロセスとして実行する
+(`settings_server.py`が動いていなくても`main.py`は通常通り動作する。
+config.jsonが存在すればその内容を使い、無ければ従来通り`.env`/既定値で動く)。
+
+既定では`http://0.0.0.0:8787`で待受する。Dashboard側の接続先設定は
+[`dashboard/README.md`](../dashboard/README.md)を参照。
+
+### セキュリティに関する重要な注意
+
+`settings_server.py`には既定で認証機能が無い。`ENABLE_ORDERS`・
+`DEMO_ONLY`・ロット数などトレードに直結する設定を書き換えられるため、
+**必ず信頼できるローカルネットワーク(自宅Wi-Fi等)内でのみ使用し、
+インターネットへは絶対に公開しないこと**(ポート開放・リバースプロキシ等禁止)。
+
+簡易的な追加防御として、`.env`で`SETTINGS_API_TOKEN`を設定すると、
+`Authorization: Bearer <token>`ヘッダーの無いリクエストを拒否できる。
+設定した場合、Dashboard側の`VITE_SETTINGS_API_TOKEN`にも同じ値を
+設定すること。
+
+### 実行中の設定反映のしくみ
+
+`main.py`は監視ループの各サイクルの先頭で`config.load_config_json()`を
+呼び、`config.json`の更新日時が前回と変わっていれば自動的に再読込する。
+そのため`settings_server.py`経由でDashboardから設定を保存すると、
+次のサイクル(既定では次の`LOOP_INTERVAL_SECONDS`後)から新しい設定が
+反映される。ループの間隔自体(`LOOP_INTERVAL_SECONDS`)を変更した場合も、
+`--interval`をCLIで明示していなければ次のサイクルから新しい間隔になる。
+
+### うまくいかない場合(Dashboard連携)
+
+| 症状 | 対処 |
+|---|---|
+| Dashboardに「Bot APIに接続できません」と出る | `python settings_server.py`を起動しているか確認。スマホから開いている場合は`dashboard/.env.local`の`VITE_SETTINGS_API_URL`がPCのLAN IPになっているか確認(`localhost`はスマホ自身を指してしまうため不可) |
+| 保存しても`main.py`側に反映されない | `main.py`が起動中か、`CONFIG_JSON_PATH`が両方のプロセスで同じ場所を指しているか確認 |
+| `401 Unauthorized` | `SETTINGS_API_TOKEN`を設定した場合、Dashboard側`VITE_SETTINGS_API_TOKEN`が一致しているか確認 |
 
 ## テスト(Windows以外でも実行可能)
 

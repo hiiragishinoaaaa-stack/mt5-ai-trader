@@ -1,0 +1,153 @@
+"""ARTEMIS X Dashboard向けの設定変更用ローカルAPIサーバー。
+
+Dashboard(ブラウザ/スマホ)から、Python側の売買設定(config.json)を
+読み書きするためだけの、依存パッケージを追加しない最小限のHTTPサーバー。
+main.py(トレードのメインループ)とは別プロセスとして実行する
+(このサーバーが動いていなくてもmain.pyは通常通り動作する)。
+
+## セキュリティに関する重要な注意
+
+このサーバーには既定で認証機能が無い。DEMO_ONLY・ENABLE_ORDERS・ロット数
+などトレードに直結する設定を書き換えられるため、**信頼できるローカル
+ネットワーク(自宅Wi-Fi等)内でのみ使用し、絶対にインターネットへ公開
+(ポート開放・リバースプロキシ等)しないこと。**
+簡易的な追加防御として、.envで`SETTINGS_API_TOKEN`を設定すると、
+リクエストに`Authorization: Bearer <token>`ヘッダーが必須になる。
+
+## エンドポイント
+
+    GET  /api/settings   現在の設定値(config.json + .env + 既定値)を返す
+    POST /api/settings   送信されたJSONで設定を更新し、config.jsonへ
+                         アトミックに書き込む。範囲外の値は拒否する
+                         (settings_schema.validate()を参照)。
+
+## 実行方法
+
+    python settings_server.py
+"""
+from __future__ import annotations
+
+import json
+import logging
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import config
+import settings_schema
+from logger import setup_logger
+
+logger = logging.getLogger("mt5_ai_trader")
+
+_SETTINGS_PATH = "/api/settings"
+
+
+class SettingsRequestHandler(BaseHTTPRequestHandler):
+    server_version = "ARTEMISSettingsServer/1.0"
+
+    def _set_common_headers(self, status: int, content_type: str = "application/json; charset=utf-8") -> None:
+        self.send_response(status)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Content-Type", content_type)
+
+    def _send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._set_common_headers(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _is_authorized(self) -> bool:
+        if not config.SETTINGS_API_TOKEN:
+            return True  # トークン未設定なら認証チェックをしない(既定)
+        expected = f"Bearer {config.SETTINGS_API_TOKEN}"
+        return self.headers.get("Authorization") == expected
+
+    def do_OPTIONS(self) -> None:  # noqa: N802 (BaseHTTPRequestHandlerの規約に合わせる)
+        # ブラウザのCORSプリフライトリクエストに応答する。
+        self._set_common_headers(204)
+        self.end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path != _SETTINGS_PATH:
+            self._send_json(404, {"error": "not found"})
+            return
+        if not self._is_authorized():
+            self._send_json(401, {"error": "unauthorized"})
+            return
+
+        settings = settings_schema.current_settings()
+        self._send_json(200, {"settings": settings})
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != _SETTINGS_PATH:
+            self._send_json(404, {"error": "not found"})
+            return
+        if not self._is_authorized():
+            self._send_json(401, {"error": "unauthorized"})
+            return
+
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw_body = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send_json(400, {"success": False, "errors": {"_": "不正なJSONです"}})
+            return
+
+        if not isinstance(payload, dict):
+            self._send_json(400, {"success": False, "errors": {"_": "JSONオブジェクトを送信してください"}})
+            return
+
+        cleaned, errors = settings_schema.validate(payload)
+        if errors:
+            logger.warning("settings_server: バリデーションエラー: %s", errors)
+            self._send_json(400, {"success": False, "errors": errors})
+            return
+
+        if not cleaned:
+            self._send_json(400, {"success": False, "errors": {"_": "有効な設定項目が含まれていません"}})
+            return
+
+        try:
+            settings_schema.save(cleaned)
+        except OSError as exc:
+            logger.error("settings_server: config.jsonの書き込みに失敗しました: %s", exc)
+            self._send_json(500, {"success": False, "errors": {"_": f"保存に失敗しました: {exc}"}})
+            return
+
+        config.load_config_json(force=True)
+        logger.info("settings_server: 設定を更新しました: %s", cleaned)
+        self._send_json(200, {"success": True, "settings": settings_schema.current_settings()})
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        # 標準のstderr出力の代わりにアプリのロガーへ流す。
+        logger.debug("settings_server: %s - %s", self.address_string(), format % args)
+
+
+def main() -> None:
+    setup_logger()
+
+    if not config.SETTINGS_API_TOKEN:
+        logger.warning(
+            "settings_server: SETTINGS_API_TOKEN未設定のため認証なしで待受します。"
+            "信頼できるローカルネットワーク以外では絶対に使用しないでください。"
+        )
+
+    server = ThreadingHTTPServer((config.SETTINGS_SERVER_HOST, config.SETTINGS_SERVER_PORT), SettingsRequestHandler)
+    logger.info(
+        "settings_server: http://%s:%s%s で待受を開始します (Ctrl+Cで終了)",
+        config.SETTINGS_SERVER_HOST,
+        config.SETTINGS_SERVER_PORT,
+        _SETTINGS_PATH,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("settings_server: ユーザーにより停止されました")
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
