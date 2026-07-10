@@ -88,6 +88,15 @@ ORDER_RESULT_FILE_PATH = (
 # EAが発注リクエストを処理し、結果ファイルを書き出すまでの最大待ち時間(秒)。
 ORDER_RESULT_WAIT_SECONDS = _env_float("ORDER_RESULT_WAIT_SECONDS", 10.0)
 
+# --- 発注テスト用モード ---
+# 通常のAI判断(BUY/SELL/WAIT)を上書きして強制する。空欄なら無効で、既存の
+# AI判断ロジックのまま動作する。値の妥当性チェックとDEMO_ONLYとの組み合わせは
+# main.py側で行う(ここでは生の文字列を読むだけ)。
+FORCE_SIGNAL = os.getenv("FORCE_SIGNAL", "").strip().upper()
+# trueの場合、起動後1サイクルだけ実行して終了する(--once/ループ設定より優先)。
+# FORCE_SIGNALと組み合わせて「条件を待たずに1回だけ発注テストする」用途を想定。
+TEST_ORDER_ONCE = _env_bool("TEST_ORDER_ONCE", False)
+
 # --- 取引対象 ---
 # EA側のInpSymbol / InpTimeframeと必ず一致させること(market_feed.pyが検証する)。
 SYMBOL = os.getenv("SYMBOL", "USDJPY")

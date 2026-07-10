@@ -9,6 +9,20 @@ order_executor.py が発注リクエストを送出する(既定はOFF)。実際
 そのものはEA側(ea/ARTEMIS_Bridge.mq5)が行い、Pythonは一切MT5へ
 直接発注しない。
 
+## 発注テスト用モード(FORCE_SIGNAL / TEST_ORDER_ONCE)
+
+通常はAIの判断(EMA/RSI/MACD)がBUY/SELLの条件を満たすまで発注は行われない。
+条件が揃うのを待たずにMT5への発注・SL/TP設定・結果JSONの一連の流れだけを
+確認したい場合、.envで以下を設定する。
+
+    DEMO_ONLY=true
+    FORCE_SIGNAL=BUY   # BUY / SELL / WAIT / 空欄(通常運転)
+    TEST_ORDER_ONCE=true
+
+FORCE_SIGNALはDEMO_ONLY=trueの場合のみ有効で、AIの判断結果を上書きする。
+TEST_ORDER_ONCEはCLIの--once有無に関わらず1サイクルだけ実行して終了する。
+どちらもFORCE_SIGNALを空欄に戻せば既存のAI判断ロジックにそのまま戻る。
+
 価格データの取得・発注のいずれもMT5 Python API(MetaTrader5パッケージ)
 ではなく、EAブリッジ方式(ea/ARTEMIS_Bridge.mq5がJSONファイル経由で
 やり取りする)で行っている。詳細はmarket_feed.py / order_executor.py の
@@ -26,15 +40,55 @@ import indicators
 from ai_engine import Signal, get_ai_engine
 from logger import setup_logger
 from market_feed import FileMarketFeed, MarketFeedError
-from order_executor import FileOrderExecutor
+from order_executor import FileOrderExecutor, generate_request_id
 
 # setup_logger()はmain()内で(--debugの有無を見た上で)呼び出す。
 # ここではハンドラ未設定のロガーを取得するだけ(setup_logger()と同じ名前の
 # ロガーを参照するため、後から設定した内容がそのまま反映される)。
 logger = logging.getLogger("mt5_ai_trader")
 
+_VALID_FORCE_SIGNALS = ("BUY", "SELL", "WAIT")
 
-def run_once(feed: FileMarketFeed, ai_engine, order_executor: FileOrderExecutor) -> Signal | None:
+
+def resolve_force_signal(raw: str) -> str:
+    """config.FORCE_SIGNALの生値を検証する。不正な値は無効(空欄)として扱う。"""
+    if not raw:
+        return ""
+    if raw not in _VALID_FORCE_SIGNALS:
+        logger.error(
+            "FORCE_SIGNAL='%s' は無効な値です(BUY/SELL/WAIT/空欄のいずれかを指定してください)。"
+            "無視して通常のAI判断で動作します。",
+            raw,
+        )
+        return ""
+    return raw
+
+
+def apply_force_signal(signal: Signal, force_signal: str) -> Signal:
+    """発注テスト用モード: DEMO_ONLY=trueかつforce_signalが設定されている場合、
+    AIの判断をforce_signalで上書きする。それ以外は元のsignalをそのまま返す
+    (= 通常運転時、FORCE_SIGNALが空欄なら既存ロジックのまま)。
+    """
+    if not force_signal:
+        return signal
+    if not config.DEMO_ONLY:
+        # DEMO_ONLY=falseの場合はFORCE_SIGNALを無視する(起動時に警告済み)。
+        return signal
+
+    return Signal(
+        action=force_signal,  # type: ignore[arg-type]
+        reason=f"[TEST MODE] FORCE_SIGNAL={force_signal} (本来のAI判断: {signal.action} / {signal.reason})",
+        details=signal.details,
+    )
+
+
+def run_once(
+    feed: FileMarketFeed,
+    ai_engine,
+    order_executor: FileOrderExecutor,
+    force_signal: str = "",
+    request_id: str | None = None,
+) -> Signal | None:
     """1回分のデータ取得 → 指標計算 → AI判断 → (必要なら発注) → ログ出力を行う。
 
     データ取得や判断、発注のどこで例外が起きても、ここで捕捉してログに残し、
@@ -44,6 +98,7 @@ def run_once(feed: FileMarketFeed, ai_engine, order_executor: FileOrderExecutor)
         snapshot = feed.read_snapshot(config.SYMBOL, config.TIMEFRAME)
         enriched = indicators.add_indicators(snapshot.candles)
         signal = ai_engine.decide(enriched)
+        signal = apply_force_signal(signal, force_signal)
 
         message = (
             f"[{config.SYMBOL}] bid={snapshot.tick.bid} ask={snapshot.tick.ask} "
@@ -53,7 +108,7 @@ def run_once(feed: FileMarketFeed, ai_engine, order_executor: FileOrderExecutor)
         logger.info(message)
         logger.debug("signal details: %s", signal.details)
 
-        order_executor.submit_if_needed(signal)
+        order_executor.submit_if_needed(signal, request_id=request_id)
 
         return signal
     except MarketFeedError as exc:
@@ -89,6 +144,9 @@ def main() -> None:
     args = parse_args()
     setup_logger(debug=args.debug)
 
+    force_signal = resolve_force_signal(config.FORCE_SIGNAL)
+    test_order_once = config.TEST_ORDER_ONCE
+
     logger.info(
         "設定: symbol=%s timeframe=%s ai_engine=%s debug=%s "
         "market_data_file=%s max_staleness=%s秒 demo_only=%s",
@@ -109,14 +167,31 @@ def main() -> None:
             config.TP_POINTS,
         )
 
+    if force_signal or test_order_once:
+        if config.DEMO_ONLY:
+            logger.warning(
+                "[TEST MODE] 発注テスト用モードが有効です: FORCE_SIGNAL=%s TEST_ORDER_ONCE=%s",
+                force_signal or "(未設定)",
+                test_order_once,
+            )
+        else:
+            logger.warning(
+                "[TEST MODE] FORCE_SIGNAL/TEST_ORDER_ONCEが設定されていますが、"
+                "DEMO_ONLY=falseのため無効です(通常のAI判断のみで動作します)"
+            )
+
     feed = FileMarketFeed()
     ai_engine = get_ai_engine()
     order_executor = FileOrderExecutor()
 
     exit_code = 0
     try:
-        if args.once:
-            signal = run_once(feed, ai_engine, order_executor)
+        if args.once or test_order_once:
+            # TEST_ORDER_ONCE用にrequest_idを1度だけ生成し、run_once()へ渡す。
+            # 同じIDを使い回すことで、万一この呼び出しが二重に実行されても
+            # order_executor側のガードにより二重発注にならない。
+            request_id = generate_request_id() if test_order_once else None
+            signal = run_once(feed, ai_engine, order_executor, force_signal=force_signal, request_id=request_id)
             if signal is None:
                 exit_code = 1
         else:
@@ -125,7 +200,7 @@ def main() -> None:
                 args.interval,
             )
             while True:
-                run_once(feed, ai_engine, order_executor)
+                run_once(feed, ai_engine, order_executor, force_signal=force_signal)
                 time.sleep(args.interval)
     except KeyboardInterrupt:
         logger.info("ユーザーにより停止されました")

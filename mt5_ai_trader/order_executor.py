@@ -45,15 +45,35 @@ class OrderResult:
     retcode: int | None = None
 
 
+def generate_request_id() -> str:
+    """一意な発注リクエストIDを生成する。
+
+    通常運転では毎回このIDを自動生成する。発注テスト用モード
+    (main.pyのTEST_ORDER_ONCE)では、呼び出し側がこの関数で1度だけ
+    IDを生成し、同じIDをsubmit_if_needed()へ明示的に渡すことで、
+    同一テスト実行内での二重発注を防ぐ。
+    """
+    return f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+
+
 class FileOrderExecutor:
     """AIのBUY/SELL判断を受け、発注リクエストJSONを書き出すクラス。"""
 
-    def submit_if_needed(self, signal: Signal) -> OrderResult | None:
+    def __init__(self) -> None:
+        # 送出済みのrequest_idを覚えておき、同じIDでの再送出(二重発注)を防ぐ。
+        self._submitted_request_ids: set[str] = set()
+
+    def submit_if_needed(self, signal: Signal, request_id: str | None = None) -> OrderResult | None:
         """signalがBUY/SELLの場合のみ発注リクエストを送出する。
 
         WAITの場合は何もしない。DEMO_ONLY=falseの場合も何もしない
         (安全のための既定OFF)。戻り値はEAの処理結果、または
         (送出しなかった/結果を確認できなかった)場合はNone。
+
+        request_idを明示的に渡した場合(発注テスト用モード)、同じIDで
+        既に送出済みであれば新たなリクエストは書き出さずスキップする。
+        省略した場合(通常のAI判断ループ)は呼び出しのたびに新しいIDを
+        自動生成するため、これまで通り毎回発注リクエストを送出できる。
         """
         if signal.action not in ("BUY", "SELL"):
             return None
@@ -65,9 +85,21 @@ class FileOrderExecutor:
             )
             return None
 
-        request_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        is_test = request_id is not None
+        tag = "[TEST MODE] " if is_test else ""
+        resolved_request_id = request_id or generate_request_id()
+
+        if resolved_request_id in self._submitted_request_ids:
+            logger.warning(
+                "order_executor: %srequest_id=%s は送出済みのためスキップします(二重発注防止)",
+                tag,
+                resolved_request_id,
+            )
+            return None
+        self._submitted_request_ids.add(resolved_request_id)
+
         request = {
-            "request_id": request_id,
+            "request_id": resolved_request_id,
             "created_at": time.time(),
             "action": signal.action,
             "symbol": config.SYMBOL,
@@ -79,9 +111,10 @@ class FileOrderExecutor:
 
         self._write_request(request)
         logger.info(
-            "order_executor: 発注リクエストを送出しました request_id=%s action=%s symbol=%s "
+            "order_executor: %s発注リクエストを送出しました request_id=%s action=%s symbol=%s "
             "volume=%s sl_points=%s tp_points=%s",
-            request_id,
+            tag,
+            resolved_request_id,
             signal.action,
             config.SYMBOL,
             config.ORDER_VOLUME,
@@ -89,27 +122,30 @@ class FileOrderExecutor:
             config.TP_POINTS,
         )
 
-        result = self._wait_for_result(request_id)
+        result = self._wait_for_result(resolved_request_id)
         if result is None:
             logger.warning(
-                "order_executor: %s秒待っても結果を確認できませんでした(request_id=%s)。"
+                "order_executor: %s%s秒待っても結果を確認できませんでした(request_id=%s)。"
                 "EAが動作しているか、MT5の「エキスパート」タブを確認してください。",
+                tag,
                 config.ORDER_RESULT_WAIT_SECONDS,
-                request_id,
+                resolved_request_id,
             )
             return None
 
         if result.success:
             logger.info(
-                "order_executor: 発注に成功しました request_id=%s ticket=%s message=%s",
-                request_id,
+                "order_executor: %s発注に成功しました request_id=%s ticket=%s message=%s",
+                tag,
+                resolved_request_id,
                 result.ticket,
                 result.message,
             )
         else:
             logger.error(
-                "order_executor: 発注は実行されませんでした request_id=%s retcode=%s message=%s",
-                request_id,
+                "order_executor: %s発注は実行されませんでした request_id=%s retcode=%s message=%s",
+                tag,
+                resolved_request_id,
                 result.retcode,
                 result.message,
             )

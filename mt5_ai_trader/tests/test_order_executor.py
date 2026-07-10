@@ -124,3 +124,67 @@ def test_no_result_file_times_out_gracefully(monkeypatch):
 
     assert result is None
     assert config.ORDER_REQUEST_FILE_PATH.exists()  # リクエスト自体は書き出されている
+
+
+def test_explicit_request_id_is_used_in_request_file():
+    executor = order_executor.FileOrderExecutor()
+
+    import threading
+
+    def fake_ea():
+        for _ in range(50):
+            if config.ORDER_REQUEST_FILE_PATH.exists():
+                break
+            time.sleep(0.02)
+        request = _read_request()
+        _write_fake_ea_result(request["request_id"], success=True)
+
+    t = threading.Thread(target=fake_ea)
+    t.start()
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), request_id="fixed-test-id-1")
+    t.join()
+
+    assert _read_request()["request_id"] == "fixed-test-id-1"
+    assert result is not None
+    assert result.success is True
+
+
+def test_same_request_id_is_not_submitted_twice(monkeypatch):
+    """発注テスト用モード(TEST_ORDER_ONCE)向け: 同じrequest_idでの再送出をブロックする。"""
+    executor = order_executor.FileOrderExecutor()
+
+    write_calls: list[dict] = []
+    monkeypatch.setattr(executor, "_write_request", lambda req: write_calls.append(req))
+    monkeypatch.setattr(
+        executor,
+        "_wait_for_result",
+        lambda request_id: order_executor.OrderResult(success=True, message="ok", ticket=1, retcode=10009),
+    )
+
+    first = executor.submit_if_needed(Signal("BUY", "uptrend", {}), request_id="dup-id")
+    second = executor.submit_if_needed(Signal("BUY", "uptrend", {}), request_id="dup-id")
+
+    assert first is not None
+    assert first.success is True
+    assert second is None  # 二重発注防止によりスキップされる
+    assert len(write_calls) == 1  # リクエストファイルへの書き出しは1回だけ
+
+
+def test_omitted_request_id_generates_unique_ids_each_call(monkeypatch):
+    """request_idを省略した通常運転では、毎回新しいIDで送出できる(既存動作を維持)。"""
+    executor = order_executor.FileOrderExecutor()
+
+    write_calls: list[dict] = []
+    monkeypatch.setattr(executor, "_write_request", lambda req: write_calls.append(req))
+    monkeypatch.setattr(
+        executor,
+        "_wait_for_result",
+        lambda request_id: order_executor.OrderResult(success=True, message="ok"),
+    )
+
+    first = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    second = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+
+    assert first is not None and second is not None
+    assert len(write_calls) == 2
+    assert write_calls[0]["request_id"] != write_calls[1]["request_id"]
