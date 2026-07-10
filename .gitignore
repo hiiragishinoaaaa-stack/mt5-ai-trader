@@ -26,6 +26,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# 上のlib/はPythonパッケージング(build/lib/等)向けだが、パス指定なしのため
+# dashboard/src/lib/ も誤って無視してしまう(format.ts等が長期間コミットされて
+# いなかった原因)。Dashboard側のsrc/lib/は明示的に対象から除外する。
+!dashboard/src/lib/
+!dashboard/src/lib/**
+
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
