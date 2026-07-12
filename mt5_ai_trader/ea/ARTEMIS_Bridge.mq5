@@ -3,7 +3,7 @@
 //|                                                                    |
 //| ARTEMIS (mt5_ai_trader) file-bridge EA.                          |
 //|                                                                    |
-//| This EA has two jobs, both driven by JSON files in the terminal's |
+//| This EA has three jobs, all driven by JSON files in the terminal's|
 //| shared "common" folder (FILE_COMMON), so that the Python side     |
 //| never needs the MetaTrader5 Python API (which suffered from IPC   |
 //| timeouts):                                                        |
@@ -14,6 +14,9 @@
 //|     written by Python (order_executor.py) and, if all safety      |
 //|     checks pass, places a market order via CTrade. Writes back a  |
 //|     result JSON file so Python can log success/failure.           |
+//|  3) Account state feed (Phase 3): writes balance/equity/margin    |
+//|     and all open positions so Python (account_feed.py) can show   |
+//|     a live account overview on the Dashboard.                    |
 //|                                                                    |
 //| Order execution is OFF by default (InpEnableOrders=false) and,    |
 //| even when enabled, this EA refuses to place any order unless the  |
@@ -37,7 +40,7 @@
 //| explanation of this EA instead.                                   |
 //+------------------------------------------------------------------+
 #property copyright "ARTEMIS"
-#property version   "2.00"
+#property version   "3.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -48,6 +51,9 @@ input ENUM_TIMEFRAMES  InpTimeframe         = PERIOD_M15;                  // Ti
 input int              InpBarsCount         = 100;                        // Number of candles to export
 input int              InpUpdateIntervalSec = 1;                          // Write interval (seconds)
 input string           InpFileName          = "artemis_market_data.json"; // Market data output file (common folder)
+
+//--- account/position state settings (Phase 3: Dashboard balance/positions)
+input string           InpAccountStateFile  = "artemis_account_state.json"; // Account+position output file (common folder)
 
 //--- order execution settings (Phase 2)
 input bool             InpEnableOrders      = false;                              // Master switch: allow this EA to place orders
@@ -99,6 +105,7 @@ int OnInit()
 
    EventSetTimer(MathMax(1, InpUpdateIntervalSec));
    WriteMarketData(); // write once immediately so Python does not have to wait for the first timer tick
+   WriteAccountState();
    Print("ARTEMIS: started. symbol=", InpSymbol, " timeframe=", TimeframeToString(InpTimeframe),
          " file=", InpFileName, " orders_enabled=", g_orders_effectively_enabled, " (common folder)");
    return INIT_SUCCEEDED;
@@ -114,6 +121,7 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    WriteMarketData();
+   WriteAccountState();
    ProcessOrderRequest();
 }
 
@@ -298,6 +306,81 @@ void WriteMarketData()
    if(!FileMove(g_tmp_file_name, FILE_COMMON, InpFileName, FILE_REWRITE | FILE_COMMON))
    {
       Print("ARTEMIS: failed to rename market data file, last_error=", GetLastError());
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Phase 3: write account balance/equity/margin and all open         |
+//| positions (not just this EA's own trades) so the Dashboard can    |
+//| show a live account overview. Written to its own file so a        |
+//| parse failure here can never affect market data or order          |
+//| processing.                                                       |
+//+------------------------------------------------------------------+
+void WriteAccountState()
+{
+   string tmp_name = InpAccountStateFile + ".tmp";
+   int handle = FileOpen(tmp_name, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("ARTEMIS: failed to open account state temp file, last_error=", GetLastError());
+      return;
+   }
+
+   string json = "{";
+   json += "\"updated_at\":" + IntegerToString((long)TimeCurrent()) + ",";
+   json += "\"account\":{";
+   json += "\"login\":" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + ",";
+   json += "\"currency\":\"" + JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)) + "\",";
+   json += "\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ",";
+   json += "\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
+   json += "\"margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN), 2) + ",";
+   json += "\"margin_free\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2) + ",";
+   json += "\"profit\":" + DoubleToString(AccountInfoDouble(ACCOUNT_PROFIT), 2);
+   json += "},";
+
+   json += "\"positions\":[";
+   int total = PositionsTotal();
+   int written = 0;
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      if(written > 0)
+         json += ",";
+      written++;
+
+      long   type      = PositionGetInteger(POSITION_TYPE);
+      string type_str  = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+      string pos_symbol = PositionGetString(POSITION_SYMBOL);
+
+      json += "{";
+      json += "\"ticket\":" + IntegerToString((long)ticket) + ",";
+      json += "\"symbol\":\"" + JsonEscape(pos_symbol) + "\",";
+      json += "\"type\":\"" + type_str + "\",";
+      json += "\"volume\":" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) + ",";
+      json += "\"price_open\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), _Digits) + ",";
+      json += "\"price_current\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), _Digits) + ",";
+      json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
+      json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
+      json += "\"profit\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
+      json += "\"open_time\":" + IntegerToString((long)PositionGetInteger(POSITION_TIME)) + ",";
+      json += "\"magic\":" + IntegerToString((long)PositionGetInteger(POSITION_MAGIC)) + ",";
+      json += "\"is_artemis\":" + ((PositionGetInteger(POSITION_MAGIC) == (long)InpMagicNumber) ? "true" : "false");
+      json += "}";
+   }
+   json += "]";
+   json += "}";
+
+   FileWriteString(handle, json);
+   FileClose(handle);
+
+   if(!FileMove(tmp_name, FILE_COMMON, InpAccountStateFile, FILE_REWRITE | FILE_COMMON))
+   {
+      Print("ARTEMIS: failed to rename account state file, last_error=", GetLastError());
    }
 }
 

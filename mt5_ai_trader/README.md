@@ -119,8 +119,9 @@ Python側はMT5の口座状態(残高やポジション)を一切知り得ない
 
 ### STEP 3: ファイルが書き出されているか確認する
 
-エクスプローラーで以下を開き、`artemis_market_data.json` が作成され、
-数秒おきに更新日時が変わっていることを確認する。
+エクスプローラーで以下を開き、`artemis_market_data.json` と
+`artemis_account_state.json` が作成され、数秒おきに更新日時が
+変わっていることを確認する。
 
 ```
 %APPDATA%\MetaQuotes\Terminal\Common\Files\
@@ -366,6 +367,24 @@ config.jsonが存在すればその内容を使い、無ければ従来通り`.e
 | Dashboardに「Bot APIに接続できません」と出る | `python settings_server.py`を起動しているか確認。スマホから開いている場合は`dashboard/.env.local`の`VITE_SETTINGS_API_URL`がPCのLAN IPになっているか確認(`localhost`はスマホ自身を指してしまうため不可) |
 | 保存しても`main.py`側に反映されない | `main.py`が起動中か、`CONFIG_JSON_PATH`が両方のプロセスで同じ場所を指しているか確認 |
 | `401 Unauthorized` | `SETTINGS_API_TOKEN`を設定した場合、Dashboard側`VITE_SETTINGS_API_TOKEN`が一致しているか確認 |
+| Home/Tradeの残高・ポジションが「—」のまま | `GET /api/account`が503を返している状態。EA(v3.00以降)が`artemis_account_state.json`を書き出しているか、MT5が起動しているか確認 |
+
+## Dashboardの残高・ポジション表示(account_feed.py)
+
+EA(`ARTEMIS_Bridge.mq5`)は価格データ・発注結果に加えて、口座の残高・
+証拠金・保有中の全ポジションを`artemis_account_state.json`へ定期的に
+書き出す(`InpUpdateIntervalSec`と同じ間隔)。`account_feed.py`がこの
+ファイルを読み、`settings_server.py`の`GET /api/account`がDashboardへ返す。
+
+- MT5に接続している口座の**すべての**ポジション(このEA以外が発注したものも
+  含む)を返す。ARTEMISが発注したポジションには`is_artemis: true`のフラグが
+  付く(`InpMagicNumber`が一致するかで判定)。
+- データが無い/古すぎる(既定30秒、`ACCOUNT_STATE_MAX_STALENESS_SECONDS`で
+  変更可)場合は`503`を返す。これは認証エラーやサーバーダウンとは別の状態
+  として扱われ、DashboardのHome/Trade画面は「MT5からの応答待ち」の表示になる
+  (エラー扱いにはならない)。
+- 既存のEAをMT5で使っている場合、`ARTEMIS_Bridge.mq5`を再コンパイル・
+  再適用しないとこの機能は有効にならない(EA側のバージョン: 3.00以降)。
 
 ## テスト(Windows以外でも実行可能)
 

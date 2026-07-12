@@ -81,6 +81,17 @@ MARKET_DATA_FILE_PATH = (
 # 許容遅延(秒)。EAのInpUpdateIntervalSecより十分大きい値にすること。
 MARKET_DATA_MAX_STALENESS_SECONDS = _env_int("MARKET_DATA_MAX_STALENESS_SECONDS", 30)
 
+# --- 口座情報・ポジション(Phase 3: Dashboardの残高/ポジション表示) ---
+# EA(ea/ARTEMIS_Bridge.mq5)が書き出す残高・証拠金・保有ポジション一覧の
+# JSONファイル(account_feed.py参照)。
+_account_state_file_path_env = os.getenv("ACCOUNT_STATE_FILE_PATH")
+ACCOUNT_STATE_FILE_PATH = (
+    Path(_account_state_file_path_env)
+    if _account_state_file_path_env
+    else _common_files_dir() / "artemis_account_state.json"
+)
+ACCOUNT_STATE_MAX_STALENESS_SECONDS = _env_int("ACCOUNT_STATE_MAX_STALENESS_SECONDS", 30)
+
 # --- 発注(Phase2) ---
 # ENABLE_ORDERSとDEMO_ONLYの両方が明示的にtrueの場合のみ発注リクエストを
 # 書き出す(既定はどちらもfalse)。ENABLE_ORDERSは「発注そのものを行うか」、

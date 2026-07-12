@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -49,6 +50,7 @@ def base_url(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SETTINGS_API_TOKEN", "")
     monkeypatch.setattr(config, "ENABLE_ORDERS", False)
     monkeypatch.setattr(config, "DEMO_ONLY", False)
+    monkeypatch.setattr(config, "ACCOUNT_STATE_FILE_PATH", tmp_path / "artemis_account_state.json")
 
     server, thread, url = _start_server()
     try:
@@ -125,5 +127,49 @@ def test_token_required_when_configured(tmp_path, monkeypatch):
         status_with_token, body, _ = _request(f"{url}/api/settings", token="secret123")
         assert status_with_token == 200
         assert "settings" in body
+    finally:
+        _stop_server(server, thread)
+
+
+def test_get_account_returns_state(base_url):
+    payload = {
+        "updated_at": time.time(),
+        "account": {
+            "login": 12345678,
+            "currency": "USD",
+            "balance": 10000.0,
+            "equity": 9980.5,
+            "margin": 50.0,
+            "margin_free": 9930.5,
+            "profit": -19.5,
+        },
+        "positions": [],
+    }
+    config.ACCOUNT_STATE_FILE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+
+    status, body, _ = _request(f"{base_url}/api/account")
+
+    assert status == 200
+    assert body["account"]["balance"] == 10000.0
+    assert body["positions"] == []
+    assert body["target_symbol"] == config.SYMBOL
+
+
+def test_get_account_missing_file_returns_503(base_url):
+    status, body, _ = _request(f"{base_url}/api/account")
+
+    assert status == 503
+    assert "error" in body
+
+
+def test_get_account_requires_token_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_JSON_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(config, "ACCOUNT_STATE_FILE_PATH", tmp_path / "artemis_account_state.json")
+    monkeypatch.setattr(config, "SETTINGS_API_TOKEN", "secret123")
+
+    server, thread, url = _start_server()
+    try:
+        status_no_token, _, _ = _request(f"{url}/api/account")
+        assert status_no_token == 401
     finally:
         _stop_server(server, thread)

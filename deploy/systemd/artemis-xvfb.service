@@ -1,0 +1,13 @@
+[Unit]
+Description=ARTEMIS virtual display (Xvfb) for headless MT5 (Wine)
+After=network.target
+
+[Service]
+Type=simple
+User=__ARTEMIS_USER__
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1024x768x16 -nolisten tcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -108,6 +108,42 @@ export interface TradingSettings {
   DEMO_ONLY: boolean;
 }
 
+// --- 実際にPython側(account_feed.py経由でEAが書き出すJSON)から取得する
+// 残高・ポジション情報。settings_server.pyの GET /api/account のレスポンス
+// (dataclasses.asdict()の出力)と1:1で対応するため、あえてキー名を
+// Python側と揃えている(snake_case)。
+
+export interface RealAccountInfo {
+  login: number;
+  currency: string;
+  balance: number;
+  equity: number;
+  margin: number;
+  margin_free: number;
+  profit: number;
+}
+
+export interface RealPosition {
+  ticket: number;
+  symbol: string;
+  type: "BUY" | "SELL";
+  volume: number;
+  price_open: number;
+  price_current: number;
+  sl: number;
+  tp: number;
+  profit: number;
+  open_time: number; // unix seconds
+  magic: number;
+  is_artemis: boolean;
+}
+
+export interface AccountState {
+  account: RealAccountInfo;
+  positions: RealPosition[];
+  target_symbol: string;
+}
+
 // --- ここから下はまだUIモックの設定(バックエンドと未接続) -------------------
 
 export interface DiscordSettings {

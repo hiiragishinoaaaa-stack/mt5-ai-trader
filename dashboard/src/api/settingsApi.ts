@@ -12,18 +12,7 @@
  * 有効。スマホから開く場合は必ずPCのLAN IPを設定すること。README参照)。
  */
 import type { TradingSettings } from "../types";
-
-const DEFAULT_API_URL = "http://localhost:8787";
-
-function apiBaseUrl(): string {
-  const fromEnv = import.meta.env.VITE_SETTINGS_API_URL;
-  return fromEnv && fromEnv.trim() !== "" ? fromEnv.replace(/\/+$/, "") : DEFAULT_API_URL;
-}
-
-function authHeaders(): Record<string, string> {
-  const token = import.meta.env.VITE_SETTINGS_API_TOKEN;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
+import { apiBaseUrl, authHeaders } from "./botApiClient";
 
 export class SettingsApiError extends Error {}
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=ARTEMIS MT5 terminal (Wine, headless via Xvfb)
+After=network.target artemis-xvfb.service
+Requires=artemis-xvfb.service
+
+[Service]
+Type=simple
+User=__ARTEMIS_USER__
+Environment=DISPLAY=:99
+Environment=WINEPREFIX=__WINE_PREFIX__
+ExecStart=/usr/bin/wine "__MT5_TERMINAL_PATH__"
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
