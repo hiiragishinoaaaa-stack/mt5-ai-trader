@@ -1,0 +1,14 @@
+[Unit]
+Description=ARTEMIS Settings API server (settings_server.py)
+After=network.target
+
+[Service]
+Type=simple
+User=__ARTEMIS_USER__
+WorkingDirectory=__ARTEMIS_HOME__/mt5_ai_trader
+ExecStart=__ARTEMIS_HOME__/mt5_ai_trader/.venv/bin/python __ARTEMIS_HOME__/mt5_ai_trader/settings_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

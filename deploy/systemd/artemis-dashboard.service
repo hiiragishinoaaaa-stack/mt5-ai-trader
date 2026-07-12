@@ -1,0 +1,15 @@
+[Unit]
+Description=ARTEMIS X Dashboard (vite preview, static build)
+After=network.target
+
+[Service]
+Type=simple
+User=__ARTEMIS_USER__
+WorkingDirectory=__ARTEMIS_HOME__/dashboard
+Environment=PATH=__NODE_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=__ARTEMIS_HOME__/dashboard/node_modules/.bin/vite preview --host 0.0.0.0 --port 5173
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
