@@ -210,6 +210,41 @@ def test_run_once_checks_daily_summary_every_cycle_regardless_of_bot_run_state(m
     assert len(calls) == 1
 
 
+def test_run_once_checks_close_notifier_every_cycle_regardless_of_bot_run_state(monkeypatch):
+    """BOT_RUN_STATEがRUNNINGでなくても、決済通知チェックは毎サイクル行う。"""
+    import close_notifier
+
+    calls = []
+    monkeypatch.setattr(close_notifier, "notify_newly_closed_trades", lambda feed: calls.append(feed))
+    monkeypatch.setattr(config, "BOT_RUN_STATE", "STOPPED")
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert len(calls) == 1
+
+
+def test_run_once_close_notifier_error_does_not_break_cycle(monkeypatch):
+    import close_notifier
+
+    def _raise(feed):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(close_notifier, "notify_newly_closed_trades", _raise)
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None  # 通常のサイクルはそのまま続行する
+
+
 def test_run_once_daily_summary_error_does_not_break_cycle(monkeypatch):
     import daily_summary
 

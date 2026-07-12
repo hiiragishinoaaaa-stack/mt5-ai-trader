@@ -539,6 +539,28 @@ Anthropicは https://console.anthropic.com/settings/keys 。
   一切含まれない)。`AI_ENGINE`(どのエンジンを使うか)だけがDashboardから
   変更できる。
 
+## 決済通知(Phase 8)
+
+発注(エントリー)時の通知(`order_executor.py`経由の`discord_notifier.notify_trade_executed`)
+とは別に、ポジションが決済された(利確/損切り/手動決済等でクローズされた)
+ときにもDiscordへ通知する(`close_notifier.py`)。専用のON/OFF設定は無く、
+`DISCORD_NOTIFY_ON_TRADE`(取引ごとの通知)を共用する。
+
+- 決済そのものはMT5(ブローカーサーバー)がSL/TP到達時に自動で行うため、
+  Python側は一切関与しない。この通知は「決済されたことを検知して知らせる」
+  だけの補助機能。
+- 決済の検知は`trade_history_feed.py`(EA v4.00以降が書き出す取引履歴)を
+  使うため、**EAがv4.00以降でないと動作しない**(取引履歴ファイルが
+  存在しない場合は静かにスキップする)。
+- `main.py`は`run_once()`の先頭で毎サイクル`close_notifier.notify_newly_closed_trades()`
+  を呼び出す(`BOT_RUN_STATE`に関わらず動作する)。前回チェック時より
+  新しく決済された取引(`close_time`が進んだもの)だけを通知し、送信済み
+  かどうかは`artemis_close_notifier_state.json`(gitignore対象)に保存され、
+  プロセス再起動をまたいでも重複送信しない。
+- 初回起動時(状態ファイルが無いとき)は、既存の決済済み取引をまとめて
+  通知せず、その時点の最新`close_time`を基準値として記録するだけに留める
+  (導入した瞬間に過去分がまとめて届く「後追いスパム」を防ぐため)。
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

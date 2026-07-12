@@ -269,6 +269,10 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       `journalctl -u artemis-bot -f`にBUY/SELL/WAITの判断ログが流れる
       (キー未設定のまま切り替えた場合は毎回WAITになり、ai_statusの理由欄に
       「APIキーが未設定です」と表示される。これは正常な安全動作)
+- [ ] ポジションが決済(利確/損切り)されると、DISCORD_NOTIFY_ON_TRADE=trueの
+      場合Discordへ決済通知が届く(要EA v4.00以降。`curl http://127.0.0.1:8787/api/trade-history`
+      が200を返すか確認。404/503ならEAが古い可能性が高いので、
+      `ea/ARTEMIS_Bridge.mq5`をv4.00以降に再コンパイル・再適用する)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

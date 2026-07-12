@@ -9,6 +9,7 @@ import pytest
 
 import config
 import discord_notifier
+from trade_history_feed import ClosedTrade
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +81,43 @@ def test_notify_order_failed_sends_when_enabled(monkeypatch):
     discord_notifier.notify_order_failed("BUY", "USDJPY", "market closed")
 
     assert len(calls) == 1
+
+
+def _closed_trade(**overrides) -> ClosedTrade:
+    base = dict(
+        position_id=1,
+        symbol="USDJPY",
+        type="BUY",
+        volume=0.1,
+        price_open=161.913,
+        price_close=162.113,
+        profit=2000.0,
+        open_time=1000,
+        close_time=2000,
+        magic=990101,
+        is_artemis=True,
+    )
+    base.update(overrides)
+    return ClosedTrade(**base)
+
+
+def test_notify_trade_closed_sends_when_enabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: calls.append(req))
+
+    discord_notifier.notify_trade_closed(_closed_trade())
+
+    assert len(calls) == 1
+
+
+def test_notify_trade_closed_skips_when_notify_on_trade_false(monkeypatch):
+    monkeypatch.setattr(config, "DISCORD_NOTIFY_ON_TRADE", False)
+    calls = []
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: calls.append(req))
+
+    discord_notifier.notify_trade_closed(_closed_trade())
+
+    assert calls == []
 
 
 def test_notify_daily_summary_sends_when_enabled(monkeypatch):

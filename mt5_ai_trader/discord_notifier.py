@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 
 import config
+from trade_history_feed import ClosedTrade
 
 logger = logging.getLogger("mt5_ai_trader")
 
@@ -54,6 +55,22 @@ def notify_order_failed(action: str, symbol: str, message: str) -> None:
     if not config.DISCORD_NOTIFY_ON_ERROR:
         return
     _send(f"⚠️ **発注失敗** {action} {symbol}\n{message}")
+
+
+def notify_trade_closed(trade: ClosedTrade) -> None:
+    """ポジションが決済された(利確/損切り/手動決済等)ときに呼び出す。
+
+    発注(エントリー)時の通知(notify_trade_executed)と同じ
+    DISCORD_NOTIFY_ON_TRADEを使う(専用のON/OFFは設けない)。
+    """
+    if not config.DISCORD_NOTIFY_ON_TRADE:
+        return
+    emoji = "\U0001f7e2" if trade.profit >= 0 else "\U0001f534"  # green/red circle
+    _send(
+        f"{emoji} **決済 {trade.type} {trade.symbol}** volume={trade.volume}\n"
+        f"エントリー={trade.price_open} → 決済={trade.price_close}\n"
+        f"損益: {trade.profit:+.2f}"
+    )
 
 
 def notify_daily_summary(date_str: str, total_profit: float, trade_count: int, win_rate: float) -> None:

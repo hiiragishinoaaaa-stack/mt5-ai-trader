@@ -164,6 +164,8 @@ mt5_ai_trader/config.json
 mt5_ai_trader/artemis_ai_status.json
 # ARTEMIS: 日次サマリー通知の送信済み状態(daily_summary.py)。
 mt5_ai_trader/artemis_daily_summary_state.json
+# ARTEMIS: 決済通知の送信済み状態(close_notifier.py)。
+mt5_ai_trader/artemis_close_notifier_state.json
 .venv
 env/
 venv/

@@ -218,6 +218,18 @@ DAILY_SUMMARY_STATE_FILE_PATH = (
     else BASE_DIR / "artemis_daily_summary_state.json"
 )
 
+# --- 決済通知(Phase 8) ---
+# DISCORD_ENABLEDとDISCORD_NOTIFY_ON_TRADEの両方がtrueの場合、trade_history_feed.py
+# (EAが書き出す決済済み取引一覧)を毎サイクル確認し、前回確認時より新しく
+# 決済された取引があればDiscordへ通知する(close_notifier.py参照)。専用の
+# ON/OFFは無く、発注時の通知と同じDISCORD_NOTIFY_ON_TRADEを共用する。
+_close_notifier_state_file_path_env = os.getenv("CLOSE_NOTIFIER_STATE_FILE_PATH")
+CLOSE_NOTIFIER_STATE_FILE_PATH = (
+    Path(_close_notifier_state_file_path_env)
+    if _close_notifier_state_file_path_env
+    else BASE_DIR / "artemis_close_notifier_state.json"
+)
+
 # --- Dashboard設定API(settings_server.py) ---
 _config_json_path_env = os.getenv("CONFIG_JSON_PATH")
 CONFIG_JSON_PATH = Path(_config_json_path_env) if _config_json_path_env else BASE_DIR / "config.json"

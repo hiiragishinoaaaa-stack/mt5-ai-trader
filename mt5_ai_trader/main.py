@@ -53,6 +53,14 @@ daily_summary.maybe_send_daily_summary()を呼び出す(売買を止めていて
 その日の結果は知りたいはずのため)。実際に送信するかどうかは
 DISCORD_NOTIFY_DAILY_SUMMARY等の設定と1日1回の重複送信防止によって
 daily_summary.py内部で判定される。詳細はdaily_summary.pyを参照。
+
+## 決済通知(Phase 8)
+
+同様にBOT_RUN_STATEの値に関わらず、run_once()の先頭で毎サイクル
+close_notifier.notify_newly_closed_trades()を呼び出す。前回チェック時より
+新しく決済された取引があればDiscordへ通知する(発注時の通知とは別で、
+利確/損切り/手動決済等でポジションが閉じたタイミングを知らせる)。
+詳細はclose_notifier.pyを参照。
 """
 from __future__ import annotations
 
@@ -62,6 +70,7 @@ import sys
 import time
 
 import ai_status
+import close_notifier
 import config
 import daily_summary
 import indicators
@@ -157,10 +166,17 @@ def run_once(
             config.LOOP_INTERVAL_SECONDS,
         )
 
+    history_feed = trade_history_feed or FileTradeHistoryFeed()
+
     try:
-        daily_summary.maybe_send_daily_summary(trade_history_feed or FileTradeHistoryFeed())
+        daily_summary.maybe_send_daily_summary(history_feed)
     except Exception:
         logger.exception("日次サマリー送信チェック中に予期しないエラーが発生しました(Discord通知のみに影響)")
+
+    try:
+        close_notifier.notify_newly_closed_trades(history_feed)
+    except Exception:
+        logger.exception("決済通知チェック中に予期しないエラーが発生しました(Discord通知のみに影響)")
 
     if config.BOT_RUN_STATE != "RUNNING":
         reason = (
