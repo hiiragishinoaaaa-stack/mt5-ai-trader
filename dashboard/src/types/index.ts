@@ -22,48 +22,6 @@ export interface AiStatus {
   updatedAt: string; // ISO timestamp
 }
 
-export interface OpenPosition {
-  id: string;
-  symbol: string;
-  side: "BUY" | "SELL";
-  volume: number;
-  entryPrice: number;
-  currentPrice: number;
-  sl: number;
-  tp: number;
-  profit: number;
-  openedAt: string;
-}
-
-export interface HomeSummary {
-  botState: BotRunState;
-  aiState: AiState;
-  todaysProfit: number;
-  balance: number;
-  currentSymbol: string;
-  winRate: number; // 0-100
-  position: OpenPosition | null;
-}
-
-export interface OrderHistoryItem {
-  id: string;
-  symbol: string;
-  side: "BUY" | "SELL";
-  volume: number;
-  entryPrice: number;
-  exitPrice: number;
-  profit: number;
-  aiReason: string;
-  openedAt: string;
-  closedAt: string;
-}
-
-export interface TradeSnapshot {
-  position: OpenPosition | null;
-  aiStatus: AiStatus;
-  history: OrderHistoryItem[];
-}
-
 export interface ProfitPoint {
   date: string; // ISO date
   value: number;
@@ -72,17 +30,6 @@ export interface ProfitPoint {
 export interface MonthlyProfitPoint {
   month: string; // "2026-06"
   value: number;
-}
-
-export interface AnalyticsSummary {
-  profitCurve: ProfitPoint[];
-  dailyProfit: ProfitPoint[];
-  monthlyProfit: MonthlyProfitPoint[];
-  winRate: number;
-  profitFactor: number;
-  maxDrawdown: number;
-  averageProfit: number;
-  totalTrades: number;
 }
 
 // --- 実際にPython側(config.json)へ反映される売買設定 -----------------------
@@ -106,6 +53,10 @@ export interface TradingSettings {
   ENTRY_STRICTNESS: EntryStrictness;
   ENABLE_ORDERS: boolean;
   DEMO_ONLY: boolean;
+  DISCORD_ENABLED: boolean;
+  DISCORD_WEBHOOK_URL: string;
+  DISCORD_NOTIFY_ON_TRADE: boolean;
+  DISCORD_NOTIFY_ON_ERROR: boolean;
 }
 
 // --- 実際にPython側(account_feed.py経由でEAが書き出すJSON)から取得する
@@ -144,13 +95,44 @@ export interface AccountState {
   target_symbol: string;
 }
 
+// --- 実際にPython側(ai_status.py経由でmain.pyが書き出すJSON)から取得する
+// 最新のAI判断。settings_server.pyの GET /api/ai-status のレスポンスと
+// 1:1で対応する(snake_case)。
+
+export interface RealAiStatus {
+  action: AiAction;
+  confidence: number;
+  reason: string;
+  symbol: string;
+  timeframe: string;
+  updated_at: number; // unix seconds
+}
+
+// --- 実際にPython側(trade_history_feed.py経由でEAが書き出すJSON)から
+// 取得する決済済み取引一覧。settings_server.pyの GET /api/trade-history の
+// レスポンスと1:1で対応する(snake_case)。AIの判断理由はMT5側が知らない
+// ため含まれない(直近の判断理由が必要な場合はRealAiStatusを参照)。
+
+export interface RealClosedTrade {
+  position_id: number;
+  symbol: string;
+  type: "BUY" | "SELL";
+  volume: number;
+  price_open: number;
+  price_close: number;
+  profit: number;
+  open_time: number; // unix seconds
+  close_time: number; // unix seconds
+  magic: number;
+  is_artemis: boolean;
+}
+
 // --- ここから下はまだUIモックの設定(バックエンドと未接続) -------------------
+// Discordの enabled/webhookUrl/notifyOnTrade/notifyOnError は
+// TradingSettings(DISCORD_*)へ移動し実際に接続済み。ここに残っているのは
+// notifyOnDailySummaryのみ(まだ実装していない)。
 
 export interface DiscordSettings {
-  enabled: boolean;
-  webhookUrl: string;
-  notifyOnTrade: boolean;
-  notifyOnError: boolean;
   notifyOnDailySummary: boolean;
 }
 

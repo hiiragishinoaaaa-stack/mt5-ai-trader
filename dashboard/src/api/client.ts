@@ -1,23 +1,14 @@
 /**
- * The single seam between the UI and its data source.
+ * Mock data seam for the parts of the ARTEMIS X dashboard not yet connected to
+ * a real backend: bot process control (Start/Stop/Emergency Stop) and the
+ * remaining Settings sections (VPS/AI engine選択/MT5参考情報/日次サマリー)。
  *
- * Every function here currently resolves mock data (src/data/mock.ts) after a
- * short simulated delay, which also lets screens show a real loading state
- * instead of a permanent flash of empty content. When ARTEMIS grows a real
- * backend — most likely a small HTTP layer reading the same JSON files /
- * SQLite database the Python bot and EA bridge already write — only this
- * file needs to change. Pages and components should always import from
- * here, never from src/data/mock.ts directly.
+ * Home/Trade/AnalyticsのAI判断・残高・ポジション・取引履歴は、それぞれ
+ * src/api/accountApi.ts・aiStatusApi.ts・tradeHistoryApi.ts経由で
+ * settings_server.py(Python)から実データを取得しており、ここは通らない。
  */
-import type { AiStatus, AnalyticsSummary, BotRunState, HomeSummary, SettingsState, TradeSnapshot } from "../types";
-import {
-  mockAiStatus,
-  mockAnalyticsSummary,
-  mockHomeSummary,
-  mockOrderHistory,
-  mockPosition,
-  mockSettings,
-} from "../data/mock";
+import type { BotRunState, SettingsState } from "../types";
+import { mockSettings } from "../data/mock";
 
 const LATENCY_MS = 350;
 
@@ -29,31 +20,10 @@ function resolveAfterDelay<T>(value: T, ms = LATENCY_MS): Promise<T> {
 
 // In-memory mutable state so Start / Stop / Emergency Stop feel alive in the
 // mock without a backend. Resets on page reload — that's expected for a UI mock.
-let botState: BotRunState = mockHomeSummary.botState;
+let botState: BotRunState = "RUNNING";
 
-export async function getHomeSummary(): Promise<HomeSummary> {
-  const hasPosition = botState === "RUNNING";
-  return resolveAfterDelay({
-    ...mockHomeSummary,
-    botState,
-    position: hasPosition ? mockPosition : null,
-  });
-}
-
-export async function getAiStatus(): Promise<AiStatus> {
-  return resolveAfterDelay(mockAiStatus);
-}
-
-export async function getTradeSnapshot(): Promise<TradeSnapshot> {
-  return resolveAfterDelay({
-    position: botState === "RUNNING" ? mockPosition : null,
-    aiStatus: mockAiStatus,
-    history: mockOrderHistory,
-  });
-}
-
-export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
-  return resolveAfterDelay(mockAnalyticsSummary);
+export async function getBotState(): Promise<BotRunState> {
+  return resolveAfterDelay(botState);
 }
 
 export async function getSettings(): Promise<SettingsState> {

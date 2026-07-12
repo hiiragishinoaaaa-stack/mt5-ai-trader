@@ -2,12 +2,13 @@
 
 ARTEMIS(mt5_ai_trader)のWeb管理画面。
 
-Home / Trade / Analytics の3画面と、Settingsの大部分は**UIモック**で、
-MT5・Python(`mt5_ai_trader/`)側とは接続していない。一方、Settings画面の
-「AI判断ロジック」「発注設定」(売買設定)は Python側の `settings_server.py`
-と実際にHTTP通信しており、保存すると `mt5_ai_trader/config.json` に書き込まれ、
-実行中のボットに反映される(詳細は `mt5_ai_trader/README.md` の
-「Dashboardからの設定変更(settings_server.py)」を参照)。
+Home / Trade / Analytics / Settingsの4画面のうち、売買設定(AI判断ロジック・
+発注設定・Discord通知)、残高・保有ポジション、AIのリアルタイム判断、決済済み
+取引履歴・成績統計は、いずれもPython側の`settings_server.py`と実際にHTTP
+通信しており、モックではない実データを表示する(詳細は`mt5_ai_trader/README.md`
+の「Dashboardからの設定変更(settings_server.py)」「DashboardのAI判断・
+取引履歴・Discord通知(Phase 4)」を参照)。VPS/AI判断エンジン選択/MT5参考情報
+の一部と、START/STOP/EMERGENCY STOPボタン(ボットプロセス制御)はまだUIモック。
 
 スマホでの片手操作を最優先に設計した、ダーク基調・ミニマルなダッシュボード。
 画面下固定のナビゲーションで Home / Trade / Analytics / Settings の4画面を
@@ -16,15 +17,24 @@ MT5・Python(`mt5_ai_trader/`)側とは接続していない。一方、Settings
 ## できること・できないこと
 
 - ✅ 4画面のUI一式(レスポンシブ、PC/スマホ両対応)
-- ✅ START/STOP/EMERGENCY STOPボタン(画面内の状態表示が変わるのみ、まだ未接続)
-- ✅ Settings画面上部「AI判断ロジック」「発注設定」: `settings_server.py`
-  経由でPython側の実際の設定を取得・保存できる(ORDER_VOLUME/SL_POINTS/
-  TP_POINTS/TIMEFRAME/LOOP_INTERVAL_SECONDS/RSI_OVERBOUGHT/RSI_OVERSOLD/
-  EMA_FAST_PERIOD/EMA_SLOW_PERIOD/Entry Strictness/ENABLE_ORDERS/DEMO_ONLY)
-- ✅ Settingsのそれ以外の項目(Discord/通知/VPS/AI判断エンジン選択/MT5参考情報)
+- ✅ Home: 残高・保有ポジション・AIのリアルタイム判断(BUY/SELL/WAIT・
+  confidence)・当日の損益・勝率(すべて実データ)
+- ✅ Trade: 保有中の全ポジション・AI Judgement・決済済み取引履歴(すべて実データ)
+- ✅ Analytics: 累積損益・日別/月別損益・勝率・プロフィットファクター・
+  最大ドローダウン・平均損益(すべて取引履歴から計算した実データ。EA側の
+  取得範囲=既定30日/最大50件に限る)
+- ✅ Settings画面上部「AI判断ロジック」「発注設定」「Discord通知」:
+  `settings_server.py`経由でPython側の実際の設定を取得・保存できる
+  (ORDER_VOLUME/SL_POINTS/TP_POINTS/TIMEFRAME/LOOP_INTERVAL_SECONDS/
+  RSI_OVERBOUGHT/RSI_OVERSOLD/EMA_FAST_PERIOD/EMA_SLOW_PERIOD/
+  Entry Strictness/ENABLE_ORDERS/DEMO_ONLY/DISCORD_ENABLED/
+  DISCORD_WEBHOOK_URL/DISCORD_NOTIFY_ON_TRADE/DISCORD_NOTIFY_ON_ERROR)
+- ✅ Settingsのそれ以外の項目(VPS/AI判断エンジン選択/MT5参考情報/日次サマリー)
   はその場の見た目が変わるのみで保存はしない
-- ❌ Home/Trade/AnalyticsのMT5・Pythonボット・EAとの実際の通信(まだ実装していない)
-- ❌ Discord/VPS/通知設定の永続化(リロードするとモックデータに戻る)
+- ❌ START/STOP/EMERGENCY STOPボタン(画面内の状態表示が変わるのみ、ボット
+  プロセスそのものの制御はまだ未実装)
+- ❌ VPS/AI判断エンジン選択/MT5参考情報/日次サマリー通知の永続化
+  (リロードするとモックデータに戻る)
 
 ## 技術構成
 

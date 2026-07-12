@@ -12,7 +12,7 @@ import { Eyebrow } from "../Eyebrow";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { Skeleton } from "../Skeleton";
-import { NumberField, PillGroup, Toggle, ToggleRow } from "./fields";
+import { NumberField, PillGroup, TextField, Toggle, ToggleRow } from "./fields";
 import { AlertIcon, CheckIcon } from "../icons";
 
 type Status = "loading" | "ready" | "connection_error";
@@ -259,6 +259,35 @@ export function TradingSettings() {
             disabled={saving}
           />
         </div>
+      </Card>
+
+      <Card className="flex flex-col gap-1">
+        <span className="mb-1 text-sm font-semibold text-ink">Discord通知</span>
+        <ToggleRow
+          label="Discord通知を有効にする"
+          description="取引の実行・失敗をDiscordへ送信します"
+          checked={draft.DISCORD_ENABLED}
+          onChange={(v) => updateDraft({ DISCORD_ENABLED: v })}
+        />
+        <TextField
+          label="Webhook URL"
+          mono
+          value={draft.DISCORD_WEBHOOK_URL}
+          onChange={(v) => updateDraft({ DISCORD_WEBHOOK_URL: v })}
+          placeholder="https://discord.com/api/webhooks/..."
+        />
+        <ToggleRow
+          label="取引ごとに通知"
+          description="発注が成功したときに通知します"
+          checked={draft.DISCORD_NOTIFY_ON_TRADE}
+          onChange={(v) => updateDraft({ DISCORD_NOTIFY_ON_TRADE: v })}
+        />
+        <ToggleRow
+          label="エラー通知"
+          description="発注が失敗・タイムアウトしたときに通知します"
+          checked={draft.DISCORD_NOTIFY_ON_ERROR}
+          onChange={(v) => updateDraft({ DISCORD_NOTIFY_ON_ERROR: v })}
+        />
       </Card>
 
       {banner ? (

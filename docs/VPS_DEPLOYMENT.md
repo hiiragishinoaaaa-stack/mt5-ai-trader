@@ -248,6 +248,13 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       表示される(`curl http://127.0.0.1:8787/api/account` が200を返すか確認。
       503の場合はMT5/EA側がまだ`artemis_account_state.json`を書き出して
       いない)
+- [ ] DashboardのHome/Trade画面にAI判断(BUY/SELL/WAIT)がリアルタイムで
+      表示される(`curl http://127.0.0.1:8787/api/ai-status` が200を返すか
+      確認。503の場合は`artemis-bot`サービスが動作していない)
+- [ ] DashboardのTrade/Analytics画面に、モックではなく実際の取引履歴・
+      勝率・プロフィットファクターが表示される(`curl http://127.0.0.1:8787/api/trade-history`
+      が200を返すか確認。503の場合はEAが古い場合があるので、`ea/ARTEMIS_Bridge.mq5`
+      をv4.00以降に再コンパイル・再適用したか確認する)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

@@ -92,6 +92,26 @@ ACCOUNT_STATE_FILE_PATH = (
 )
 ACCOUNT_STATE_MAX_STALENESS_SECONDS = _env_int("ACCOUNT_STATE_MAX_STALENESS_SECONDS", 30)
 
+# --- 取引履歴(Phase 4: Dashboardの注文履歴/統計表示) ---
+# EA(ea/ARTEMIS_Bridge.mq5、v4.00以降)が書き出す決済済み取引一覧のJSON
+# ファイル(trade_history_feed.py参照)。
+_trade_history_file_path_env = os.getenv("TRADE_HISTORY_FILE_PATH")
+TRADE_HISTORY_FILE_PATH = (
+    Path(_trade_history_file_path_env)
+    if _trade_history_file_path_env
+    else _common_files_dir() / "artemis_trade_history.json"
+)
+# EAのInpTradeHistoryIntervalSec(既定10秒)より十分大きい値にすること。
+TRADE_HISTORY_MAX_STALENESS_SECONDS = _env_int("TRADE_HISTORY_MAX_STALENESS_SECONDS", 60)
+
+# --- AI判断のリアルタイム表示(Phase 4: Dashboardのモック解消) ---
+# main.pyが各サイクルの判断をここへ書き出し、Dashboardが表示する
+# (MT5 EAを介さないPython内部のみのやり取りなので、Common\Filesは使わない)。
+_ai_status_file_path_env = os.getenv("AI_STATUS_FILE_PATH")
+AI_STATUS_FILE_PATH = Path(_ai_status_file_path_env) if _ai_status_file_path_env else BASE_DIR / "artemis_ai_status.json"
+# LOOP_INTERVAL_SECONDSより十分大きい値にすること(既定60秒ループに対し120秒)。
+AI_STATUS_MAX_STALENESS_SECONDS = _env_int("AI_STATUS_MAX_STALENESS_SECONDS", 120)
+
 # --- 発注(Phase2) ---
 # ENABLE_ORDERSとDEMO_ONLYの両方が明示的にtrueの場合のみ発注リクエストを
 # 書き出す(既定はどちらもfalse)。ENABLE_ORDERSは「発注そのものを行うか」、
@@ -161,6 +181,13 @@ LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 60)
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "trades.log"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# --- Discord通知(Phase 4: 取引ごとの通知) ---
+# DISCORD_ENABLEDとWebhook URLの両方が設定されている場合のみ通知を送信する。
+DISCORD_ENABLED = _env_bool("DISCORD_ENABLED", False)
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_NOTIFY_ON_TRADE = _env_bool("DISCORD_NOTIFY_ON_TRADE", True)
+DISCORD_NOTIFY_ON_ERROR = _env_bool("DISCORD_NOTIFY_ON_ERROR", True)
 
 # --- Dashboard設定API(settings_server.py) ---
 _config_json_path_env = os.getenv("CONFIG_JSON_PATH")

@@ -51,6 +51,8 @@ def base_url(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENABLE_ORDERS", False)
     monkeypatch.setattr(config, "DEMO_ONLY", False)
     monkeypatch.setattr(config, "ACCOUNT_STATE_FILE_PATH", tmp_path / "artemis_account_state.json")
+    monkeypatch.setattr(config, "AI_STATUS_FILE_PATH", tmp_path / "artemis_ai_status.json")
+    monkeypatch.setattr(config, "TRADE_HISTORY_FILE_PATH", tmp_path / "artemis_trade_history.json")
 
     server, thread, url = _start_server()
     try:
@@ -173,3 +175,63 @@ def test_get_account_requires_token_when_configured(tmp_path, monkeypatch):
         assert status_no_token == 401
     finally:
         _stop_server(server, thread)
+
+
+def test_get_ai_status_returns_latest_decision(base_url):
+    payload = {
+        "action": "BUY",
+        "confidence": 100,
+        "reason": "テスト理由",
+        "symbol": "USDJPY",
+        "timeframe": "M15",
+        "updated_at": time.time(),
+    }
+    config.AI_STATUS_FILE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+
+    status, body, _ = _request(f"{base_url}/api/ai-status")
+
+    assert status == 200
+    assert body["action"] == "BUY"
+    assert body["confidence"] == 100
+
+
+def test_get_ai_status_missing_file_returns_503(base_url):
+    status, body, _ = _request(f"{base_url}/api/ai-status")
+
+    assert status == 503
+    assert "error" in body
+
+
+def test_get_trade_history_returns_trades(base_url):
+    payload = {
+        "updated_at": time.time(),
+        "trades": [
+            {
+                "position_id": 1,
+                "symbol": "USDJPY",
+                "type": "BUY",
+                "volume": 0.01,
+                "price_open": 157.1,
+                "price_close": 157.244,
+                "profit": 4320.0,
+                "open_time": int(time.time()) - 7200,
+                "close_time": int(time.time()) - 3600,
+                "magic": 990101,
+                "is_artemis": True,
+            }
+        ],
+    }
+    config.TRADE_HISTORY_FILE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+
+    status, body, _ = _request(f"{base_url}/api/trade-history")
+
+    assert status == 200
+    assert len(body["trades"]) == 1
+    assert body["trades"][0]["symbol"] == "USDJPY"
+
+
+def test_get_trade_history_missing_file_returns_503(base_url):
+    status, body, _ = _request(f"{base_url}/api/trade-history")
+
+    assert status == 503
+    assert "error" in body

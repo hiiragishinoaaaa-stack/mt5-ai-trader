@@ -24,6 +24,7 @@ import uuid
 from dataclasses import dataclass
 
 import config
+import discord_notifier
 from ai_engine import Signal
 
 logger = logging.getLogger("mt5_ai_trader")
@@ -138,6 +139,9 @@ class FileOrderExecutor:
                 config.ORDER_RESULT_WAIT_SECONDS,
                 resolved_request_id,
             )
+            discord_notifier.notify_order_failed(
+                signal.action, config.SYMBOL, "EAからの応答がタイムアウトしました(MT5が動作していない可能性があります)"
+            )
             return None
 
         if result.success:
@@ -148,6 +152,9 @@ class FileOrderExecutor:
                 result.ticket,
                 result.message,
             )
+            discord_notifier.notify_trade_executed(
+                signal.action, config.SYMBOL, config.ORDER_VOLUME, result.ticket, result.message
+            )
         else:
             logger.error(
                 "order_executor: %s発注は実行されませんでした request_id=%s retcode=%s message=%s",
@@ -156,6 +163,7 @@ class FileOrderExecutor:
                 result.retcode,
                 result.message,
             )
+            discord_notifier.notify_order_failed(signal.action, config.SYMBOL, result.message)
         return result
 
     def _write_request(self, request: dict) -> None:

@@ -50,6 +50,10 @@ FIELDS: dict[str, FieldSpec] = {
     "ENTRY_STRICTNESS": FieldSpec("ENTRY_STRICTNESS", str, choices=tuple(ENTRY_STRICTNESS_PRESETS)),
     "ENABLE_ORDERS": FieldSpec("ENABLE_ORDERS", bool),
     "DEMO_ONLY": FieldSpec("DEMO_ONLY", bool),
+    "DISCORD_ENABLED": FieldSpec("DISCORD_ENABLED", bool),
+    "DISCORD_WEBHOOK_URL": FieldSpec("DISCORD_WEBHOOK_URL", str),
+    "DISCORD_NOTIFY_ON_TRADE": FieldSpec("DISCORD_NOTIFY_ON_TRADE", bool),
+    "DISCORD_NOTIFY_ON_ERROR": FieldSpec("DISCORD_NOTIFY_ON_ERROR", bool),
 }
 
 

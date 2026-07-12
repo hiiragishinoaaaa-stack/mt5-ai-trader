@@ -160,6 +160,8 @@ activemq-data/
 # ARTEMIS: Dashboardから書き込まれるローカル設定(settings_server.py)。
 # .env.exampleが既定値を示すのでこちらはコミットしない。
 mt5_ai_trader/config.json
+# ARTEMIS: main.pyが各サイクルで書き出す実行時のAI判断状態(ai_status.py)。
+mt5_ai_trader/artemis_ai_status.json
 .venv
 env/
 venv/

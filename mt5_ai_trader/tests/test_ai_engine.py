@@ -25,6 +25,7 @@ def test_decide_returns_buy_on_bullish_setup():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "BUY"
+    assert signal.confidence == 100  # 3条件すべて満たす場合のみBUYが成立するため
 
 
 def test_decide_returns_sell_on_bearish_setup():
@@ -39,6 +40,7 @@ def test_decide_returns_wait_when_signals_conflict():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "WAIT"
+    assert 0 < signal.confidence < 100  # 一部の条件(上昇トレンド)だけ満たしている
 
 
 def test_decide_returns_wait_on_empty_dataframe():

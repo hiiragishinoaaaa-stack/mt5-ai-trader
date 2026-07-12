@@ -1,14 +1,14 @@
-import { useEffect, useState } from "react";
-import { getTradeSnapshot } from "../api/client";
 import { useAccountState } from "../hooks/useAccountState";
-import type { OrderHistoryItem, RealPosition, TradeSnapshot } from "../types";
+import { useAiStatus } from "../hooks/useAiStatus";
+import { useTradeHistory } from "../hooks/useTradeHistory";
+import type { RealClosedTrade, RealPosition } from "../types";
 import { Header } from "../components/Header";
 import { PageShell, PageTitle } from "../components/PageShell";
 import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { Eyebrow } from "../components/Eyebrow";
 import { Skeleton } from "../components/Skeleton";
-import { formatDateTime, formatPrice, formatSignedCurrency, formatSignedCurrencyJPY } from "../lib/format";
+import { formatDateTime, formatPrice, formatSignedCurrency } from "../lib/format";
 
 function unixToIso(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString();
@@ -50,41 +50,35 @@ function DetailRow({ label, value, valueClassName = "" }: { label: string; value
   );
 }
 
-function HistoryItem({ item }: { item: OrderHistoryItem }) {
-  const isProfit = item.profit >= 0;
+function RealHistoryItem({ trade, currency }: { trade: RealClosedTrade; currency: string }) {
+  const isProfit = trade.profit >= 0;
   return (
     <Card className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Badge tone={item.side === "BUY" ? "profit" : "loss"}>{item.side}</Badge>
-          <span className="text-sm font-medium text-ink">{item.symbol}</span>
+          <Badge tone={trade.type === "BUY" ? "profit" : "loss"}>{trade.type}</Badge>
+          <span className="text-sm font-medium text-ink">{trade.symbol}</span>
+          {trade.is_artemis ? <span className="text-[10px] uppercase tracking-wide text-ink-faint">ARTEMIS</span> : null}
         </div>
         <span className={`text-sm font-bold ${isProfit ? "text-profit" : "text-loss"}`}>
-          {formatSignedCurrencyJPY(item.profit)}
+          {formatSignedCurrency(trade.profit, currency)}
         </span>
       </div>
-      <p className="text-xs leading-relaxed text-ink-dim">{item.aiReason}</p>
       <div className="flex items-center justify-between border-t border-border pt-2.5 text-xs text-ink-faint">
         <span>
-          {formatPrice(item.entryPrice)} → {formatPrice(item.exitPrice)}
+          {formatPrice(trade.price_open)} → {formatPrice(trade.price_close)}
         </span>
-        <span>{formatDateTime(item.closedAt)}</span>
+        <span>{formatDateTime(unixToIso(trade.close_time))}</span>
       </div>
     </Card>
   );
 }
 
 export function TradePage() {
-  const [snapshot, setSnapshot] = useState<TradeSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
   const { status: acctStatus, state: acctState, message: acctMessage } = useAccountState();
-
-  useEffect(() => {
-    getTradeSnapshot().then((s) => {
-      setSnapshot(s);
-      setLoading(false);
-    });
-  }, []);
+  const { status: aiStatusStatus, aiStatus, message: aiStatusMessage } = useAiStatus();
+  const { status: historyStatus, trades, message: historyMessage } = useTradeHistory();
+  const currency = acctState?.account.currency ?? "JPY";
 
   return (
     <PageShell>
@@ -110,33 +104,49 @@ export function TradePage() {
         <Card className="text-sm text-ink-dim">現在保有しているポジションはありません。</Card>
       )}
 
-      {!loading && snapshot ? (
-        <>
-          <Eyebrow className="mb-2 mt-6">AI Judgement</Eyebrow>
-          <Card className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <Badge
-                tone={snapshot.aiStatus.action === "BUY" ? "profit" : snapshot.aiStatus.action === "SELL" ? "loss" : "neutral"}
-              >
-                {snapshot.aiStatus.action}
-              </Badge>
-              <span className="text-xs text-ink-faint">Confidence {snapshot.aiStatus.confidence}%</span>
-            </div>
-            <p className="text-sm leading-relaxed text-ink-dim">{snapshot.aiStatus.reason}</p>
-          </Card>
-        </>
+      <Eyebrow className="mb-2 mt-6">AI Judgement</Eyebrow>
+      {aiStatusStatus === "loading" ? (
+        <Card>
+          <Skeleton className="h-16 w-full" />
+        </Card>
+      ) : aiStatusStatus === "connection_error" ? (
+        <Card className="text-sm text-loss">Bot APIに接続できません。settings_server.pyが起動しているか確認してください。</Card>
+      ) : aiStatusStatus === "data_unavailable" ? (
+        <Card className="text-sm text-ink-dim">{aiStatusMessage || "AIの判断がまだ届いていません。main.pyが起動しているか確認してください。"}</Card>
+      ) : aiStatus ? (
+        <Card className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <Badge tone={aiStatus.action === "BUY" ? "profit" : aiStatus.action === "SELL" ? "loss" : "neutral"}>
+              {aiStatus.action}
+            </Badge>
+            <span className="text-xs text-ink-faint">Confidence {aiStatus.confidence}%</span>
+          </div>
+          <p className="text-sm leading-relaxed text-ink-dim">{aiStatus.reason}</p>
+        </Card>
       ) : null}
 
       <Eyebrow className="mb-2 mt-6">Order History</Eyebrow>
-      <div className="flex flex-col gap-3">
-        {loading
-          ? [0, 1, 2].map((i) => (
-              <Card key={i}>
-                <Skeleton className="h-20 w-full" />
-              </Card>
-            ))
-          : snapshot?.history.map((item) => <HistoryItem key={item.id} item={item} />)}
-      </div>
+      {historyStatus === "loading" ? (
+        <div className="flex flex-col gap-3">
+          {[0, 1, 2].map((i) => (
+            <Card key={i}>
+              <Skeleton className="h-20 w-full" />
+            </Card>
+          ))}
+        </div>
+      ) : historyStatus === "connection_error" ? (
+        <Card className="text-sm text-loss">Bot APIに接続できません。settings_server.pyが起動しているか確認してください。</Card>
+      ) : historyStatus === "data_unavailable" ? (
+        <Card className="text-sm text-ink-dim">{historyMessage || "取引履歴がまだ届いていません。"}</Card>
+      ) : trades.length === 0 ? (
+        <Card className="text-sm text-ink-dim">まだ決済された取引がありません。</Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {trades.map((t) => (
+            <RealHistoryItem key={t.position_id} trade={t} currency={currency} />
+          ))}
+        </div>
+      )}
     </PageShell>
   );
 }

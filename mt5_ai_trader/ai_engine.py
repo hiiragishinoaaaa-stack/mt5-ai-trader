@@ -26,11 +26,16 @@ Action = Literal["BUY", "SELL", "WAIT"]
 
 @dataclass
 class Signal:
-    """AIエンジンが返す売買判断。"""
+    """AIエンジンが返す売買判断。
+
+    confidenceは統計的な確率ではなく、判断条件のうちいくつが満たされたかを
+    0-100で表したヒューリスティックな指標(RuleBasedAIEngine参照)。
+    """
 
     action: Action
     reason: str
     details: dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.0
 
 
 class AIEngine(ABC):
@@ -61,14 +66,26 @@ class RuleBasedAIEngine(AIEngine):
         downtrend = latest["ema_fast"] < latest["ema_slow"]
         macd_bullish = latest["macd_hist"] > 0
         macd_bearish = latest["macd_hist"] < 0
+        rsi_not_overbought = latest["rsi"] < config.RSI_OVERBOUGHT
+        rsi_not_oversold = latest["rsi"] > config.RSI_OVERSOLD
 
-        if uptrend and macd_bullish and latest["rsi"] < config.RSI_OVERBOUGHT:
-            return Signal("BUY", "上昇トレンド + MACD陽転 + RSI過熱なし", details)
+        # confidence = 3条件(トレンド/MACD/RSI)のうち満たされた数の割合(0/33/66/100)。
+        # 統計的な確率ではなく、ルールがどれだけ揃っているかを表すだけの指標。
+        buy_confidence = round(sum([uptrend, macd_bullish, rsi_not_overbought]) / 3 * 100)
+        sell_confidence = round(sum([downtrend, macd_bearish, rsi_not_oversold]) / 3 * 100)
 
-        if downtrend and macd_bearish and latest["rsi"] > config.RSI_OVERSOLD:
-            return Signal("SELL", "下降トレンド + MACD陰転 + RSI売られすぎなし", details)
+        if uptrend and macd_bullish and rsi_not_overbought:
+            return Signal("BUY", "上昇トレンド + MACD陽転 + RSI過熱なし", details, buy_confidence)
 
-        return Signal("WAIT", "トレンド・モメンタムの条件が揃っていません", details)
+        if downtrend and macd_bearish and rsi_not_oversold:
+            return Signal("SELL", "下降トレンド + MACD陰転 + RSI売られすぎなし", details, sell_confidence)
+
+        return Signal(
+            "WAIT",
+            "トレンド・モメンタムの条件が揃っていません",
+            details,
+            max(buy_confidence, sell_confidence),
+        )
 
 
 class UnavailableAIEngine(AIEngine):

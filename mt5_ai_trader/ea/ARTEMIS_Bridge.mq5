@@ -17,6 +17,10 @@
 //|  3) Account state feed (Phase 3): writes balance/equity/margin    |
 //|     and all open positions so Python (account_feed.py) can show   |
 //|     a live account overview on the Dashboard.                    |
+//|  4) Trade history feed (Phase 4): writes recently closed trades   |
+//|     (matched entry/exit deal pairs) so Python                     |
+//|     (trade_history_feed.py) can show real order history and       |
+//|     stats on the Dashboard instead of mock data.                  |
 //|                                                                    |
 //| Order execution is OFF by default (InpEnableOrders=false) and,    |
 //| even when enabled, this EA refuses to place any order unless the  |
@@ -40,7 +44,7 @@
 //| explanation of this EA instead.                                   |
 //+------------------------------------------------------------------+
 #property copyright "ARTEMIS"
-#property version   "3.00"
+#property version   "4.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -54,6 +58,12 @@ input string           InpFileName          = "artemis_market_data.json"; // Mar
 
 //--- account/position state settings (Phase 3: Dashboard balance/positions)
 input string           InpAccountStateFile  = "artemis_account_state.json"; // Account+position output file (common folder)
+
+//--- trade history settings (Phase 4: Dashboard order history / stats)
+input string           InpTradeHistoryFile     = "artemis_trade_history.json"; // Closed-trade history output file (common folder)
+input int              InpTradeHistoryDays     = 30;                          // How many days back to include
+input int              InpTradeHistoryMaxCount = 50;                          // Max closed trades to include (most recent kept)
+input int              InpTradeHistoryIntervalSec = 10;                       // Minimum seconds between trade-history rewrites (HistorySelect is heavier than a tick read)
 
 //--- order execution settings (Phase 2)
 input bool             InpEnableOrders      = false;                              // Master switch: allow this EA to place orders
@@ -69,9 +79,10 @@ input int              InpSlippagePoints    = 20;                               
 // NEVER put a real/live account number here.
 input long              InpConfirmedDemoAccount = 0;                               // Manual override: your verified DEMO account login (0 = off)
 
-string g_tmp_file_name;
-bool   g_orders_effectively_enabled = false;
-CTrade g_trade;
+string   g_tmp_file_name;
+bool     g_orders_effectively_enabled = false;
+CTrade   g_trade;
+datetime g_last_trade_history_write = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -106,6 +117,7 @@ int OnInit()
    EventSetTimer(MathMax(1, InpUpdateIntervalSec));
    WriteMarketData(); // write once immediately so Python does not have to wait for the first timer tick
    WriteAccountState();
+   WriteTradeHistory();
    Print("ARTEMIS: started. symbol=", InpSymbol, " timeframe=", TimeframeToString(InpTimeframe),
          " file=", InpFileName, " orders_enabled=", g_orders_effectively_enabled, " (common folder)");
    return INIT_SUCCEEDED;
@@ -122,6 +134,11 @@ void OnTimer()
 {
    WriteMarketData();
    WriteAccountState();
+   if(TimeCurrent() - g_last_trade_history_write >= InpTradeHistoryIntervalSec)
+   {
+      WriteTradeHistory();
+      g_last_trade_history_write = TimeCurrent();
+   }
    ProcessOrderRequest();
 }
 
@@ -381,6 +398,134 @@ void WriteAccountState()
    if(!FileMove(tmp_name, FILE_COMMON, InpAccountStateFile, FILE_REWRITE | FILE_COMMON))
    {
       Print("ARTEMIS: failed to rename account state file, last_error=", GetLastError());
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Phase 4: write recently closed trades (matched entry/exit deal    |
+//| pairs) so the Dashboard can show real order history / stats       |
+//| instead of mock data. MQL5 has no built-in map type, so entry     |
+//| deals are collected into a small array and matched to their exit  |
+//| deal by POSITION_ID as the deal history (chronological) is        |
+//| scanned. Deals whose entry falls outside the lookback window are  |
+//| skipped (no matching entry found).                                 |
+//+------------------------------------------------------------------+
+struct ArtemisTradeEntry
+{
+   long   position_id;
+   string symbol;
+   string type;
+   double volume;
+   double price;
+   long   time;
+};
+
+void WriteTradeHistory()
+{
+   datetime from = TimeCurrent() - (datetime)(InpTradeHistoryDays * 86400);
+   if(!HistorySelect(from, TimeCurrent()))
+   {
+      Print("ARTEMIS: failed to select deal history, last_error=", GetLastError());
+      return;
+   }
+
+   int total = HistoryDealsTotal();
+   ArtemisTradeEntry entries[];
+   ArrayResize(entries, 0);
+
+   string json = "{";
+   json += "\"updated_at\":" + IntegerToString((long)TimeCurrent()) + ",";
+   json += "\"trades\":[";
+
+   int written = 0;
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal_ticket = HistoryDealGetTicket(i);
+      if(deal_ticket == 0)
+         continue;
+
+      long deal_type = HistoryDealGetInteger(deal_ticket, DEAL_TYPE);
+      if(deal_type != DEAL_TYPE_BUY && deal_type != DEAL_TYPE_SELL)
+         continue; // skip balance/credit/correction pseudo-deals
+
+      long position_id = (long)HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
+      long entry_flag   = HistoryDealGetInteger(deal_ticket, DEAL_ENTRY);
+
+      if(entry_flag == DEAL_ENTRY_IN)
+      {
+         ArtemisTradeEntry e;
+         e.position_id = position_id;
+         e.symbol      = HistoryDealGetString(deal_ticket, DEAL_SYMBOL);
+         e.type        = (deal_type == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+         e.volume      = HistoryDealGetDouble(deal_ticket, DEAL_VOLUME);
+         e.price       = HistoryDealGetDouble(deal_ticket, DEAL_PRICE);
+         e.time        = (long)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
+
+         int n = ArraySize(entries);
+         ArrayResize(entries, n + 1);
+         entries[n] = e;
+         continue;
+      }
+
+      if(entry_flag != DEAL_ENTRY_OUT && entry_flag != DEAL_ENTRY_OUT_BY)
+         continue;
+
+      int match = -1;
+      for(int k = 0; k < ArraySize(entries); k++)
+      {
+         if(entries[k].position_id == position_id)
+         {
+            match = k;
+            break;
+         }
+      }
+      if(match < 0)
+         continue; // entry deal is outside the lookback window; skip this exit
+
+      double exit_price = HistoryDealGetDouble(deal_ticket, DEAL_PRICE);
+      double profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT)
+                     + HistoryDealGetDouble(deal_ticket, DEAL_SWAP)
+                     + HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION);
+      long close_time = (long)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
+      long magic = HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
+
+      if(written > 0)
+         json += ",";
+      written++;
+
+      json += "{";
+      json += "\"position_id\":" + IntegerToString(position_id) + ",";
+      json += "\"symbol\":\"" + JsonEscape(entries[match].symbol) + "\",";
+      json += "\"type\":\"" + entries[match].type + "\",";
+      json += "\"volume\":" + DoubleToString(entries[match].volume, 2) + ",";
+      json += "\"price_open\":" + DoubleToString(entries[match].price, _Digits) + ",";
+      json += "\"price_close\":" + DoubleToString(exit_price, _Digits) + ",";
+      json += "\"profit\":" + DoubleToString(profit, 2) + ",";
+      json += "\"open_time\":" + IntegerToString(entries[match].time) + ",";
+      json += "\"close_time\":" + IntegerToString(close_time) + ",";
+      json += "\"magic\":" + IntegerToString(magic) + ",";
+      json += "\"is_artemis\":" + ((magic == (long)InpMagicNumber) ? "true" : "false");
+      json += "}";
+
+      if(written >= InpTradeHistoryMaxCount)
+         break;
+   }
+
+   json += "]}";
+
+   string tmp_name = InpTradeHistoryFile + ".tmp";
+   int handle = FileOpen(tmp_name, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("ARTEMIS: failed to open trade history temp file, last_error=", GetLastError());
+      return;
+   }
+   FileWriteString(handle, json);
+   FileClose(handle);
+
+   if(!FileMove(tmp_name, FILE_COMMON, InpTradeHistoryFile, FILE_REWRITE | FILE_COMMON))
+   {
+      Print("ARTEMIS: failed to rename trade history file, last_error=", GetLastError());
    }
 }
 

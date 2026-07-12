@@ -7,7 +7,7 @@ import { Card } from "../components/Card";
 import { Skeleton } from "../components/Skeleton";
 import { PillGroup, SettingsSection, TextField, ToggleRow } from "../components/settings/fields";
 import { TradingSettings } from "../components/settings/TradingSettings";
-import { BellIcon, CpuIcon, LinkIcon, MessageIcon, ServerIcon } from "../components/icons";
+import { BellIcon, CpuIcon, LinkIcon, ServerIcon } from "../components/icons";
 import { Button } from "../components/Button";
 
 export function SettingsPage() {
@@ -35,7 +35,7 @@ export function SettingsPage() {
       <Header />
       <PageTitle sub="売買設定・Discord・VPS・通知・MT5の設定">Settings</PageTitle>
 
-      {/* 売買設定(AI判断ロジック / 発注設定)だけがPython側と実際に接続されている。 */}
+      {/* 売買設定(AI判断ロジック / 発注設定 / Discord通知)がPython側と実際に接続されている。 */}
       <TradingSettings />
 
       <div className="mt-6 flex flex-col gap-4">
@@ -47,41 +47,16 @@ export function SettingsPage() {
           ))
         ) : (
           <>
-            <SettingsSection icon={<MessageIcon className="h-4 w-4" />} title="Discord">
-              <ToggleRow
-                label="Discord連携を有効にする"
-                description="AIの判断・発注結果をDiscordへ送信します"
-                checked={settings.discord.enabled}
-                onChange={(v) => patch((p) => ({ ...p, discord: { ...p.discord, enabled: v } }))}
-              />
-              <TextField
-                label="Webhook URL"
-                mono
-                value={settings.discord.webhookUrl}
-                onChange={(v) => patch((p) => ({ ...p, discord: { ...p.discord, webhookUrl: v } }))}
-                placeholder="https://discord.com/api/webhooks/..."
-              />
-            </SettingsSection>
-
             <SettingsSection icon={<BellIcon className="h-4 w-4" />} title="通知">
               <ToggleRow
-                label="取引ごとに通知"
-                description="発注・決済のたびに通知します"
-                checked={settings.discord.notifyOnTrade}
-                onChange={(v) => patch((p) => ({ ...p, discord: { ...p.discord, notifyOnTrade: v } }))}
-              />
-              <ToggleRow
-                label="エラー通知"
-                description="接続エラーや発注失敗を通知します"
-                checked={settings.discord.notifyOnError}
-                onChange={(v) => patch((p) => ({ ...p, discord: { ...p.discord, notifyOnError: v } }))}
-              />
-              <ToggleRow
                 label="日次サマリー"
-                description="1日の損益をまとめて通知します"
+                description="1日の損益をまとめて通知します(未実装、準備中)"
                 checked={settings.discord.notifyOnDailySummary}
                 onChange={(v) => patch((p) => ({ ...p, discord: { ...p.discord, notifyOnDailySummary: v } }))}
               />
+              <p className="pb-1 pt-2 text-xs text-ink-faint">
+                Discord連携の有効化・Webhook URL・取引ごとの通知・エラー通知は、上部の「Discord通知」に移動しました。
+              </p>
             </SettingsSection>
 
             <SettingsSection icon={<ServerIcon className="h-4 w-4" />} title="VPS">

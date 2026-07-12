@@ -45,6 +45,7 @@ import logging
 import sys
 import time
 
+import ai_status
 import config
 import indicators
 from ai_engine import Signal, get_ai_engine
@@ -150,6 +151,11 @@ def run_once(
         print(message)
         logger.info(message)
         logger.debug("signal details: %s", signal.details)
+
+        try:
+            ai_status.write_status(signal, config.SYMBOL, config.TIMEFRAME)
+        except OSError:
+            logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
 
         order_executor.submit_if_needed(signal, request_id=request_id)
 
