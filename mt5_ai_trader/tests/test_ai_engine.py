@@ -6,7 +6,9 @@ import pandas as pd
 import pytest
 
 from ai_engine import (
+    CandleThrottledEngine,
     RuleBasedAIEngine,
+    Signal,
     describe_market_conditions,
     get_ai_engine,
     parse_llm_signal_json,
@@ -70,18 +72,20 @@ def test_get_ai_engine_unimplemented_raises_on_decide():
         pass
 
 
-def test_get_ai_engine_returns_openai_engine():
+def test_get_ai_engine_returns_openai_engine_wrapped_in_throttle():
     from openai_engine import OpenAIEngine
 
     engine = get_ai_engine("openai")
-    assert isinstance(engine, OpenAIEngine)
+    assert isinstance(engine, CandleThrottledEngine)
+    assert isinstance(engine._inner, OpenAIEngine)
 
 
-def test_get_ai_engine_returns_claude_engine():
+def test_get_ai_engine_returns_claude_engine_wrapped_in_throttle():
     from claude_engine import ClaudeEngine
 
     engine = get_ai_engine("claude")
-    assert isinstance(engine, ClaudeEngine)
+    assert isinstance(engine, CandleThrottledEngine)
+    assert isinstance(engine._inner, ClaudeEngine)
 
 
 # --- describe_market_conditions ---------------------------------------------
@@ -134,3 +138,58 @@ def test_parse_llm_signal_json_rejects_non_json_text():
 def test_parse_llm_signal_json_rejects_malformed_json():
     with pytest.raises(ValueError):
         parse_llm_signal_json('{"action": "BUY", "reason": }')
+
+
+# --- CandleThrottledEngine ----------------------------------------------------
+
+
+class _CountingEngine:
+    """decide()が呼ばれた回数を記録するだけのフェイクエンジン(API課金相当)。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def decide(self, df: pd.DataFrame) -> Signal:
+        self.calls += 1
+        return Signal("BUY", f"call #{self.calls}", {}, 90.0)
+
+
+def _candle_row(time: int, **overrides) -> dict:
+    row = _row(**overrides)
+    row["time"] = time
+    return row
+
+
+def test_candle_throttled_engine_calls_inner_once_per_new_candle():
+    inner = _CountingEngine()
+    engine = CandleThrottledEngine(inner)
+
+    df_candle_1 = pd.DataFrame([_candle_row(1000)])
+    s1 = engine.decide(df_candle_1)
+    s2 = engine.decide(df_candle_1)  # 同じローソク足のまま再度呼ばれる(main.pyの次サイクル相当)
+
+    assert inner.calls == 1  # 2回目はキャッシュを再利用し、内部エンジンは呼ばれない
+    assert s1.action == "BUY"
+    assert s2.action == "BUY"
+    assert "再利用" in s2.reason
+
+
+def test_candle_throttled_engine_calls_inner_again_on_new_candle():
+    inner = _CountingEngine()
+    engine = CandleThrottledEngine(inner)
+
+    engine.decide(pd.DataFrame([_candle_row(1000)]))
+    engine.decide(pd.DataFrame([_candle_row(1000)]))
+    engine.decide(pd.DataFrame([_candle_row(1900)]))  # 新しいローソク足(例: 15分後)
+
+    assert inner.calls == 2
+
+
+def test_candle_throttled_engine_calls_inner_on_empty_dataframe():
+    inner = _CountingEngine()
+    engine = CandleThrottledEngine(inner)
+
+    signal = engine.decide(pd.DataFrame())
+
+    assert inner.calls == 1
+    assert signal.action == "BUY"

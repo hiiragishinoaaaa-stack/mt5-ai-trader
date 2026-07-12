@@ -102,6 +102,46 @@ class UnavailableAIEngine(AIEngine):
         )
 
 
+class CandleThrottledEngine(AIEngine):
+    """内部エンジンのdecide()を、ローソク足が変わったときだけ呼び出すラッパー。
+
+    main.pyの監視ループはLOOP_INTERVAL_SECONDS(既定60秒)ごとに毎サイクル
+    decide()を呼ぶが、TIMEFRAME(例: M15)のローソク足はもっと長い間隔でしか
+    更新されない。OpenAI/ClaudeのようにAPI呼び出しにコストがかかるエンジンで
+    毎サイクル呼んでしまうと、同じローソク足に対して何度も課金してしまう
+    (例: LOOP_INTERVAL_SECONDS=60・TIMEFRAME=M15なら本来15回に14回は無駄)。
+
+    直近のローソク足(df末尾の"time"列)が前回decide()を呼んだときと同じ
+    場合は、内部エンジンを呼ばずキャッシュした前回の判断をそのまま返す。
+    ローソク足が変わったとき(=TIMEFRAME分ごとに1回)だけ実際にAPIを呼ぶ。
+    """
+
+    def __init__(self, inner: AIEngine) -> None:
+        self._inner = inner
+        self._last_candle_time: Any = None
+        self._cached_signal: Signal | None = None
+
+    def decide(self, df: pd.DataFrame) -> Signal:
+        if df.empty or "time" not in df.columns:
+            return self._inner.decide(df)
+
+        latest_time = df.iloc[-1]["time"]
+
+        if self._cached_signal is not None and latest_time == self._last_candle_time:
+            cached = self._cached_signal
+            return Signal(
+                cached.action,
+                f"{cached.reason}(このローソク足では既に判断済みのため再利用・API未呼び出し)",
+                cached.details,
+                cached.confidence,
+            )
+
+        signal = self._inner.decide(df)
+        self._last_candle_time = latest_time
+        self._cached_signal = signal
+        return signal
+
+
 def describe_market_conditions(df: pd.DataFrame, symbol: str, timeframe: str) -> str:
     """LLM判断エンジン(OpenAIEngine/ClaudeEngine)向けに、直近の指標状況を
     テキスト化する。RuleBasedAIEngineが使うのと同じ指標(EMA/RSI/MACD)を
@@ -173,10 +213,12 @@ def get_ai_engine(engine_name: str | None = None) -> AIEngine:
     if name == "openai":
         from openai_engine import OpenAIEngine  # 遅延import(循環import回避・rule_based運用時の余分な依存を避けるため)
 
-        return OpenAIEngine()
+        # CandleThrottledEngineで包み、ローソク足が変わったときだけAPIを呼ぶ
+        # ようにする(コスト対策。CandleThrottledEngineのdocstring参照)。
+        return CandleThrottledEngine(OpenAIEngine())
     if name == "claude":
         from claude_engine import ClaudeEngine  # 遅延import(理由は上と同じ)
 
-        return ClaudeEngine()
+        return CandleThrottledEngine(ClaudeEngine())
 
     return UnavailableAIEngine(name)

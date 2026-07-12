@@ -524,9 +524,16 @@ Anthropicは https://console.anthropic.com/settings/keys 。
   フォールバックする。外部APIの不具合が誤った発注に直結しないようにする
   ためで、実際の発注可否は引き続き`ENABLE_ORDERS`/`DEMO_ONLY`が最終的に
   ゲートする(`order_executor.py`)。
-- **実際に利用ごとに料金が発生する。** 既定の`LOOP_INTERVAL_SECONDS=60`の
-  ままだと1日1000回以上APIを呼び出す可能性があるため、コストを抑えたい
-  場合は`LOOP_INTERVAL_SECONDS`を長くすることを検討する。
+- **ローソク足が変わったときだけAPIを呼ぶ(`ai_engine.CandleThrottledEngine`)。**
+  `main.py`の監視ループは`LOOP_INTERVAL_SECONDS`(既定60秒)ごとに毎サイクル
+  `decide()`を呼ぶが、`TIMEFRAME`(既定M15)のローソク足は15分に1回しか
+  更新されない。`get_ai_engine()`はopenai/claudeを`CandleThrottledEngine`で
+  自動的に包み、直近のローソク足(`time`列)が前回と同じ間はAPIを呼ばず、
+  前回の判断をそのまま再利用する。結果として**実際にAPIが呼ばれるのは
+  `TIMEFRAME`が示す間隔(M15なら15分)に1回だけ**になり、`LOOP_INTERVAL_SECONDS`
+  を短くしても課金が増えることはない(TIMEFRAMEを短くすれば呼び出し頻度も
+  比例して上がる点は変わらないので、コストを抑えたい場合はTIMEFRAMEを
+  長め(M15/H1等)にすることを検討する)。
 - APIキー自体はセキュリティ上の理由でDashboard(`settings_schema.FIELDS`)
   には含まれず、`.env`でのみ設定する(`GET /api/settings`のレスポンスに
   一切含まれない)。`AI_ENGINE`(どのエンジンを使うか)だけがDashboardから
