@@ -3,14 +3,14 @@
 ARTEMIS(mt5_ai_trader)のWeb管理画面。
 
 Home / Trade / Analytics / Settingsの4画面のうち、売買設定(AI判断ロジック・
-発注設定・Discord通知・日次サマリー通知)、残高・保有ポジション、AIのリアル
-タイム判断、決済済み取引履歴・成績統計、START/STOP/EMERGENCY STOPボタン
-(Bot稼働状態)は、いずれもPython側の`settings_server.py`と実際にHTTP通信
-しており、モックではない実データを表示・変更する(詳細は
+AI判断エンジン選択・発注設定・Discord通知・日次サマリー通知)、残高・保有
+ポジション、AIのリアルタイム判断、決済済み取引履歴・成績統計、START/STOP/
+EMERGENCY STOPボタン(Bot稼働状態)は、いずれもPython側の`settings_server.py`
+と実際にHTTP通信しており、モックではない実データを表示・変更する(詳細は
 `mt5_ai_trader/README.md`の「Dashboardからの設定変更(settings_server.py)」
 「DashboardのAI判断・取引履歴・Discord通知(Phase 4)」「DashboardのSTART/
-STOP/EMERGENCY STOP(Phase 5)」「日次サマリー通知(Phase 6)」を参照)。
-VPS/AI判断エンジン選択/MT5参考情報はまだUIモック。
+STOP/EMERGENCY STOP(Phase 5)」「日次サマリー通知(Phase 6)」「AI判断エンジン:
+OpenAI/Claude連携(Phase 7)」を参照)。VPS/MT5参考情報はまだUIモック。
 
 スマホでの片手操作を最優先に設計した、ダーク基調・ミニマルなダッシュボード。
 画面下固定のナビゲーションで Home / Trade / Analytics / Settings の4画面を
@@ -31,16 +31,19 @@ VPS/AI判断エンジン選択/MT5参考情報はまだUIモック。
   RSI_OVERBOUGHT/RSI_OVERSOLD/EMA_FAST_PERIOD/EMA_SLOW_PERIOD/
   Entry Strictness/ENABLE_ORDERS/DEMO_ONLY/DISCORD_ENABLED/
   DISCORD_WEBHOOK_URL/DISCORD_NOTIFY_ON_TRADE/DISCORD_NOTIFY_ON_ERROR/
-  DISCORD_NOTIFY_DAILY_SUMMARY)。日次サマリーは1日1回、その日の損益を
-  Discordへ送信する(詳細は`mt5_ai_trader/README.md`のPhase 6参照)
+  DISCORD_NOTIFY_DAILY_SUMMARY/AI_ENGINE)。日次サマリーは1日1回、その日の
+  損益をDiscordへ送信する(詳細は`mt5_ai_trader/README.md`のPhase 6参照)。
+  AI_ENGINE(rule_based/openai/claude)を切り替えると、実際にOpenAI/Claude
+  のAPIを呼び出してBUY/SELL/WAITを判断させられる(APIキー自体はセキュリティ
+  上の理由でDashboardには出さず`.env`でのみ設定する。詳細はPhase 7参照)
 - ✅ Home: START/STOP/EMERGENCY STOPボタン。`BOT_RUN_STATE`を
   `settings_server.py`経由で読み書きし、`main.py`はRUNNING以外の間、
   価格取得・AI判断・発注を一切行わない(プロセス自体は動き続けるため、
   再度STARTを押せば即座に再開する。systemdサービスの起動/停止そのものの
   制御ではない。詳細は`mt5_ai_trader/README.md`のPhase 5参照)
-- ✅ Settingsのそれ以外の項目(VPS/AI判断エンジン選択/MT5参考情報)
-  はその場の見た目が変わるのみで保存はしない
-- ❌ VPS/AI判断エンジン選択/MT5参考情報の永続化(リロードするとモックデータに戻る)
+- ✅ Settingsのそれ以外の項目(VPS/MT5参考情報)はその場の見た目が変わる
+  のみで保存はしない
+- ❌ VPS/MT5参考情報の永続化(リロードするとモックデータに戻る)
 
 ## 技術構成
 

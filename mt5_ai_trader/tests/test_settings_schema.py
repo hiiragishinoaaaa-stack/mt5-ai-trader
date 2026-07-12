@@ -36,6 +36,7 @@ def test_validate_accepts_all_valid_fields():
         "DEMO_ONLY": True,
         "BOT_RUN_STATE": "STOPPED",
         "DISCORD_NOTIFY_DAILY_SUMMARY": True,
+        "AI_ENGINE": "openai",
     }
 
     cleaned, errors = settings_schema.validate(payload)
@@ -46,6 +47,7 @@ def test_validate_accepts_all_valid_fields():
     assert cleaned["ENABLE_ORDERS"] is True
     assert cleaned["BOT_RUN_STATE"] == "STOPPED"
     assert cleaned["DISCORD_NOTIFY_DAILY_SUMMARY"] is True
+    assert cleaned["AI_ENGINE"] == "openai"
 
 
 def test_validate_ignores_unknown_keys():
@@ -108,6 +110,33 @@ def test_validate_rejects_invalid_bot_run_state_choice():
 
     assert "BOT_RUN_STATE" in errors
     assert "BOT_RUN_STATE" not in cleaned
+
+
+def test_validate_accepts_all_ai_engine_choices():
+    for choice in settings_schema.AI_ENGINE_CHOICES:
+        cleaned, errors = settings_schema.validate({"AI_ENGINE": choice})
+
+        assert errors == {}
+        assert cleaned["AI_ENGINE"] == choice
+
+
+def test_validate_rejects_invalid_ai_engine_choice():
+    cleaned, errors = settings_schema.validate({"AI_ENGINE": "gemini"})
+
+    assert "AI_ENGINE" in errors
+    assert "AI_ENGINE" not in cleaned
+
+
+def test_validate_ignores_api_key_fields_not_in_schema():
+    """OPENAI_API_KEY/ANTHROPIC_API_KEYはセキュリティ上FIELDSに含まれず、
+    payloadに入っていても無視される(current_settings()にも出てこない)。
+    """
+    cleaned, errors = settings_schema.validate({"OPENAI_API_KEY": "sk-test", "ANTHROPIC_API_KEY": "sk-ant-test"})
+
+    assert cleaned == {}
+    assert errors == {}
+    assert "OPENAI_API_KEY" not in settings_schema.FIELDS
+    assert "ANTHROPIC_API_KEY" not in settings_schema.FIELDS
 
 
 def test_validate_rejects_wrong_type():

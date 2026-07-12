@@ -40,6 +40,11 @@ export type Timeframe = "M1" | "M5" | "M15" | "M30" | "H1" | "H4" | "D1";
 
 export type EntryStrictness = "conservative" | "balanced" | "aggressive";
 
+// rule_based(ヒューリスティック) / openai / claude(いずれもLLM API連携、
+// 実際に利用ごとに料金が発生する)。APIキー自体はセキュリティ上の理由で
+// Dashboardには出さず.envでのみ設定するため、ここにキーのフィールドは無い。
+export type AiEngineChoice = "rule_based" | "openai" | "claude";
+
 export interface TradingSettings {
   ORDER_VOLUME: number;
   SL_POINTS: number;
@@ -59,6 +64,7 @@ export interface TradingSettings {
   DISCORD_NOTIFY_ON_ERROR: boolean;
   DISCORD_NOTIFY_DAILY_SUMMARY: boolean;
   BOT_RUN_STATE: BotRunState;
+  AI_ENGINE: AiEngineChoice;
 }
 
 // --- 実際にPython側(account_feed.py経由でEAが書き出すJSON)から取得する
@@ -131,19 +137,14 @@ export interface RealClosedTrade {
 
 // --- ここから下はまだUIモックの設定(バックエンドと未接続) -------------------
 // Discordの設定(enabled/webhookUrl/notifyOnTrade/notifyOnError/
-// notifyOnDailySummary)はすべてTradingSettings(DISCORD_*)へ移動し
-// 実際に接続済みのため、ここにはもう残っていない。
+// notifyOnDailySummary)とAI判断エンジン選択(engine)はすべて
+// TradingSettings(DISCORD_*/AI_ENGINE)へ移動し実際に接続済みのため、
+// ここにはもう残っていない。
 
 export interface VpsSettings {
   host: string;
   status: "connected" | "disconnected";
   uptimeHours: number;
-}
-
-export interface AiSettings {
-  // riskLevel/autoTradeEnabledはTradingSettings(ENTRY_STRICTNESS/ENABLE_ORDERS)
-  // に置き換わったため、ここにはまだ実バックエンドが無いエンジン選択のみ残す。
-  engine: "rule_based" | "openai" | "claude";
 }
 
 export interface Mt5Settings {
@@ -156,6 +157,5 @@ export interface Mt5Settings {
 
 export interface SettingsState {
   vps: VpsSettings;
-  ai: AiSettings;
   mt5: Mt5Settings;
 }

@@ -17,6 +17,11 @@ from typing import Any
 
 TIMEFRAME_CHOICES = ("M1", "M5", "M15", "M30", "H1", "H4", "D1")
 
+# DashboardのSettings画面から選べるAI判断エンジン。OPENAI_API_KEY/
+# ANTHROPIC_API_KEYはセキュリティ上の理由でFIELDSに含めない(.envでのみ設定、
+# config.pyのコメント参照)。
+AI_ENGINE_CHOICES = ("rule_based", "openai", "claude")
+
 # DashboardのHome画面のSTART/STOP/EMERGENCY STOPボタンと1:1対応する。
 # STOPPED/EMERGENCY_STOPPEDのときmain.pyは判断・発注をスキップする
 # (プロセス自体は動き続ける。詳細はmain.py run_once()を参照)。
@@ -61,6 +66,7 @@ FIELDS: dict[str, FieldSpec] = {
     "DISCORD_NOTIFY_ON_ERROR": FieldSpec("DISCORD_NOTIFY_ON_ERROR", bool),
     "DISCORD_NOTIFY_DAILY_SUMMARY": FieldSpec("DISCORD_NOTIFY_DAILY_SUMMARY", bool),
     "BOT_RUN_STATE": FieldSpec("BOT_RUN_STATE", str, choices=BOT_RUN_STATE_CHOICES),
+    "AI_ENGINE": FieldSpec("AI_ENGINE", str, choices=AI_ENGINE_CHOICES),
 }
 
 

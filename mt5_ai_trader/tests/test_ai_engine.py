@@ -3,7 +3,14 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ai_engine import RuleBasedAIEngine, get_ai_engine
+import pytest
+
+from ai_engine import (
+    RuleBasedAIEngine,
+    describe_market_conditions,
+    get_ai_engine,
+    parse_llm_signal_json,
+)
 
 
 def _row(**overrides) -> dict:
@@ -55,9 +62,75 @@ def test_get_ai_engine_returns_rule_based_by_default():
 
 
 def test_get_ai_engine_unimplemented_raises_on_decide():
-    engine = get_ai_engine("openai")
+    engine = get_ai_engine("gemini")
     try:
         engine.decide(pd.DataFrame())
         assert False, "NotImplementedErrorが送出されるべき"
     except NotImplementedError:
         pass
+
+
+def test_get_ai_engine_returns_openai_engine():
+    from openai_engine import OpenAIEngine
+
+    engine = get_ai_engine("openai")
+    assert isinstance(engine, OpenAIEngine)
+
+
+def test_get_ai_engine_returns_claude_engine():
+    from claude_engine import ClaudeEngine
+
+    engine = get_ai_engine("claude")
+    assert isinstance(engine, ClaudeEngine)
+
+
+# --- describe_market_conditions ---------------------------------------------
+
+
+def test_describe_market_conditions_includes_symbol_and_indicators():
+    df = pd.DataFrame([_row(close=151.234, rsi=61.2)])
+    text = describe_market_conditions(df, "USDJPY", "M15")
+
+    assert "USDJPY" in text
+    assert "M15" in text
+    assert "151.234" in text
+    assert "61.2" in text
+
+
+# --- parse_llm_signal_json ---------------------------------------------------
+
+
+def test_parse_llm_signal_json_parses_clean_json():
+    signal = parse_llm_signal_json('{"action": "BUY", "reason": "上昇トレンド", "confidence": 80}')
+
+    assert signal.action == "BUY"
+    assert signal.reason == "上昇トレンド"
+    assert signal.confidence == 80.0
+
+
+def test_parse_llm_signal_json_extracts_json_from_surrounding_text():
+    signal = parse_llm_signal_json('以下が判断結果です:\n{"action": "WAIT", "reason": "様子見", "confidence": 10}\nよろしくお願いします')
+
+    assert signal.action == "WAIT"
+    assert signal.confidence == 10.0
+
+
+def test_parse_llm_signal_json_clamps_confidence_to_0_100():
+    signal = parse_llm_signal_json('{"action": "SELL", "reason": "test", "confidence": 999}')
+
+    assert signal.confidence == 100.0
+
+
+def test_parse_llm_signal_json_rejects_invalid_action():
+    with pytest.raises(ValueError):
+        parse_llm_signal_json('{"action": "HOLD", "reason": "test", "confidence": 50}')
+
+
+def test_parse_llm_signal_json_rejects_non_json_text():
+    with pytest.raises(ValueError):
+        parse_llm_signal_json("すみません、判断できません")
+
+
+def test_parse_llm_signal_json_rejects_malformed_json():
+    with pytest.raises(ValueError):
+        parse_llm_signal_json('{"action": "BUY", "reason": }')

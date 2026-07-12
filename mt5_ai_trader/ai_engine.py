@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -101,17 +102,81 @@ class UnavailableAIEngine(AIEngine):
         )
 
 
+def describe_market_conditions(df: pd.DataFrame, symbol: str, timeframe: str) -> str:
+    """LLM判断エンジン(OpenAIEngine/ClaudeEngine)向けに、直近の指標状況を
+    テキスト化する。RuleBasedAIEngineが使うのと同じ指標(EMA/RSI/MACD)を
+    渡すことで、判断材料をルールベースと揃えている。
+    """
+    latest = df.iloc[-1]
+    recent_closes = [round(float(v), 5) for v in df["close"].tail(10).tolist()]
+    return (
+        f"銘柄: {symbol} / 時間足: {timeframe}\n"
+        f"直近の終値(古い順、最大10件): {recent_closes}\n"
+        f"現在値(close): {latest.get('close')}\n"
+        f"EMA(短期): {latest.get('ema_fast')}\n"
+        f"EMA(長期): {latest.get('ema_slow')}\n"
+        f"RSI: {latest.get('rsi')}\n"
+        f"MACD: {latest.get('macd')}\n"
+        f"MACDシグナル: {latest.get('macd_signal')}\n"
+        f"MACDヒストグラム: {latest.get('macd_hist')}\n"
+    )
+
+
+LLM_SYSTEM_PROMPT = (
+    "あなたはFXトレードの判断アシスタントです。与えられたテクニカル指標のみに基づいて "
+    "BUY・SELL・WAITのいずれかを判断してください。根拠が不十分、あるいは指標が矛盾して "
+    "いる場合は必ずWAITを選んでください。断定的すぎる判断は避けてください。"
+    "出力は次の形式のJSONオブジェクトのみとし、それ以外の文章(前置き・コードブロック等)は"
+    '一切含めないでください: {"action": "BUY", "reason": "短い理由(日本語)", "confidence": 0から100の整数}'
+)
+
+
+def parse_llm_signal_json(content: str) -> Signal:
+    """LLMの応答文字列からSignalを組み立てる。
+
+    応答の前後に余分な文章が付いていても、最初の"{"から最後の"}"までを
+    JSONとして解釈を試みる。action/confidenceが不正な場合はValueErrorを
+    送出する(呼び出し側でWAITにフォールバックすることを想定)。
+    """
+    text = content.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("JSON形式のレスポンスが見つかりませんでした")
+
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSONの解析に失敗しました: {exc}") from exc
+
+    action = str(data.get("action", "")).upper()
+    if action not in ("BUY", "SELL", "WAIT"):
+        raise ValueError(f"不正なaction値です: {action!r}")
+
+    reason = str(data.get("reason") or "(理由なし)")
+
+    try:
+        confidence = float(data.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(100.0, confidence))
+
+    return Signal(action, reason, {}, confidence)  # type: ignore[arg-type]
+
+
 def get_ai_engine(engine_name: str | None = None) -> AIEngine:
     """設定に応じたAIEngineインスタンスを返すファクトリ関数。"""
     name = (engine_name or config.AI_ENGINE).lower()
 
     if name == "rule_based":
         return RuleBasedAIEngine()
+    if name == "openai":
+        from openai_engine import OpenAIEngine  # 遅延import(循環import回避・rule_based運用時の余分な依存を避けるため)
 
-    # 将来の拡張ポイント:
-    # if name == "openai":
-    #     return OpenAIEngine()
-    # if name == "claude":
-    #     return ClaudeEngine()
+        return OpenAIEngine()
+    if name == "claude":
+        from claude_engine import ClaudeEngine  # 遅延import(理由は上と同じ)
+
+        return ClaudeEngine()
 
     return UnavailableAIEngine(name)

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { TradingSettings as TradingSettingsData } from "../../types";
 import { fetchTradingSettings, saveTradingSettings, SettingsApiError } from "../../api/settingsApi";
 import {
+  AI_ENGINE_LABELS,
   ENTRY_STRICTNESS_PRESETS,
   TIMEFRAME_OPTIONS,
   validateTradingSettingsDraft,
@@ -139,6 +140,25 @@ export function TradingSettings() {
 
       <Card className="flex flex-col gap-1">
         <span className="mb-1 text-sm font-semibold text-ink">AI判断ロジック</span>
+        <div className="border-b border-border py-3 first:pt-0">
+          <PillGroup
+            label="判断エンジン"
+            value={draft.AI_ENGINE}
+            onChange={(v) => updateDraft({ AI_ENGINE: v })}
+            disabled={saving}
+            options={(Object.keys(AI_ENGINE_LABELS) as (keyof typeof AI_ENGINE_LABELS)[]).map((key) => ({
+              value: key,
+              label: AI_ENGINE_LABELS[key],
+            }))}
+          />
+          <span className="text-xs text-ink-faint">
+            {draft.AI_ENGINE === "rule_based"
+              ? "EMA/RSI/MACDのルールでBUY/SELL/WAITを判断します(無料)"
+              : "実際にAPIを呼び出して判断します(利用ごとに料金が発生します)。.envに" +
+                (draft.AI_ENGINE === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY") +
+                "を設定していない場合、常にWAITになります"}
+          </span>
+        </div>
         <div className="border-b border-border py-3 first:pt-0">
           <PillGroup
             label="Entry Strictness"

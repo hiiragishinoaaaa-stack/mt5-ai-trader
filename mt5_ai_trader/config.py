@@ -171,8 +171,19 @@ MACD_SIGNAL_PERIOD = _env_int("MACD_SIGNAL_PERIOD", 9)
 ENTRY_STRICTNESS = os.getenv("ENTRY_STRICTNESS", "balanced")
 
 # --- AI判断エンジン ---
-# "rule_based" が現在の唯一の実装。"openai" / "claude" は将来の拡張ポイント。
+# rule_based | openai | claude。openai/claudeは実際にAPIを呼び出すため、
+# 利用ごとに料金が発生する(LOOP_INTERVAL_SECONDSの間隔で毎サイクル呼ばれる)。
+# 詳細はopenai_engine.py / claude_engine.py、README.mdの
+# 「AI判断エンジン: OpenAI/Claude連携(Phase 7)」を参照。
 AI_ENGINE = os.getenv("AI_ENGINE", "rule_based")
+# APIキーはセキュリティ上の理由でDashboard(settings_schema.FIELDS)には含めず、
+# .envでのみ設定する(settings_server.pyのGET /api/settingsで外部に
+# 露出させないため)。未設定の場合、該当エンジンは毎回WAITにフォールバックする。
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+AI_ENGINE_TIMEOUT_SECONDS = _env_int("AI_ENGINE_TIMEOUT_SECONDS", 20)
 
 # --- 実行制御 ---
 LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 60)

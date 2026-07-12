@@ -264,6 +264,11 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       (既定13時=UTC、22時JST相当)を過ぎるとDiscordへその日の損益サマリーが
       1回だけ届く(`cat mt5_ai_trader/artemis_daily_summary_state.json`で
       送信済み日付を確認できる)
+- [ ] `.env`で`OPENAI_API_KEY`または`ANTHROPIC_API_KEY`を設定した状態で
+      Dashboard SettingsからAI_ENGINEをopenai/claudeに切り替えると、
+      `journalctl -u artemis-bot -f`にBUY/SELL/WAITの判断ログが流れる
+      (キー未設定のまま切り替えた場合は毎回WAITになり、ai_statusの理由欄に
+      「APIキーが未設定です」と表示される。これは正常な安全動作)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

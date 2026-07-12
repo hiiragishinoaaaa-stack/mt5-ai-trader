@@ -6,7 +6,7 @@
  * 実際の保存の可否は必ずPython側(POST /api/settings)の判定が最終決定になる
  * ため、両者がずれても壊れることはない(サーバー側のエラーも画面に表示する)。
  */
-import type { EntryStrictness, Timeframe, TradingSettings } from "../types";
+import type { AiEngineChoice, EntryStrictness, Timeframe, TradingSettings } from "../types";
 
 interface FieldRange {
   min: number;
@@ -25,6 +25,12 @@ export const NUMERIC_RANGES: Record<string, FieldRange> = {
 };
 
 export const TIMEFRAME_OPTIONS: Timeframe[] = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
+
+export const AI_ENGINE_LABELS: Record<AiEngineChoice, string> = {
+  rule_based: "Rule-based",
+  openai: "OpenAI",
+  claude: "Claude",
+};
 
 export const ENTRY_STRICTNESS_PRESETS: Record<
   EntryStrictness,

@@ -5,9 +5,9 @@ import { Header } from "../components/Header";
 import { PageShell, PageTitle } from "../components/PageShell";
 import { Card } from "../components/Card";
 import { Skeleton } from "../components/Skeleton";
-import { PillGroup, SettingsSection, TextField } from "../components/settings/fields";
+import { SettingsSection, TextField } from "../components/settings/fields";
 import { TradingSettings } from "../components/settings/TradingSettings";
-import { CpuIcon, LinkIcon, ServerIcon } from "../components/icons";
+import { LinkIcon, ServerIcon } from "../components/icons";
 import { Button } from "../components/Button";
 
 export function SettingsPage() {
@@ -64,23 +64,6 @@ export function SettingsPage() {
                   Connect VPS(準備中)
                 </Button>
               </div>
-            </SettingsSection>
-
-            <SettingsSection icon={<CpuIcon className="h-4 w-4" />} title="AI">
-              <PillGroup
-                label="判断エンジン"
-                value={settings.ai.engine}
-                onChange={(v) => patch((p) => ({ ...p, ai: { ...p.ai, engine: v } }))}
-                options={[
-                  { value: "rule_based", label: "Rule-based" },
-                  { value: "openai", label: "OpenAI", disabled: true },
-                  { value: "claude", label: "Claude", disabled: true },
-                ]}
-              />
-              <p className="pb-1 pt-2 text-xs text-ink-faint">
-                Entry Strictness・Enable Ordersなどの売買判断に直結する設定は、上部の「AI判断ロジック」「発注設定」に
-                移動しました。
-              </p>
             </SettingsSection>
 
             <SettingsSection icon={<ServerIcon className="h-4 w-4" />} title="MT5(参考情報)">
