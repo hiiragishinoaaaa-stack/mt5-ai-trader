@@ -17,6 +17,7 @@ def _patch_discord_config(monkeypatch):
     monkeypatch.setattr(config, "DISCORD_WEBHOOK_URL", "https://discord.example.com/webhook")
     monkeypatch.setattr(config, "DISCORD_NOTIFY_ON_TRADE", True)
     monkeypatch.setattr(config, "DISCORD_NOTIFY_ON_ERROR", True)
+    monkeypatch.setattr(config, "DISCORD_NOTIFY_DAILY_SUMMARY", True)
 
 
 def test_notify_trade_executed_sends_when_enabled(monkeypatch):
@@ -66,6 +67,25 @@ def test_notify_order_failed_sends_when_enabled(monkeypatch):
     discord_notifier.notify_order_failed("BUY", "USDJPY", "market closed")
 
     assert len(calls) == 1
+
+
+def test_notify_daily_summary_sends_when_enabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: calls.append(req))
+
+    discord_notifier.notify_daily_summary("2026-07-12", 1234.5, 3, 66.7)
+
+    assert len(calls) == 1
+
+
+def test_notify_daily_summary_skips_when_disabled(monkeypatch):
+    monkeypatch.setattr(config, "DISCORD_NOTIFY_DAILY_SUMMARY", False)
+    calls = []
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: calls.append(req))
+
+    discord_notifier.notify_daily_summary("2026-07-12", 1234.5, 3, 66.7)
+
+    assert calls == []
 
 
 def test_notify_does_not_raise_on_network_error(monkeypatch):

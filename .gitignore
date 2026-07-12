@@ -162,6 +162,8 @@ activemq-data/
 mt5_ai_trader/config.json
 # ARTEMIS: main.pyが各サイクルで書き出す実行時のAI判断状態(ai_status.py)。
 mt5_ai_trader/artemis_ai_status.json
+# ARTEMIS: 日次サマリー通知の送信済み状態(daily_summary.py)。
+mt5_ai_trader/artemis_daily_summary_state.json
 .venv
 env/
 venv/

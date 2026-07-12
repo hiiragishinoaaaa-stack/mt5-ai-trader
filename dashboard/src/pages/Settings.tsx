@@ -5,9 +5,9 @@ import { Header } from "../components/Header";
 import { PageShell, PageTitle } from "../components/PageShell";
 import { Card } from "../components/Card";
 import { Skeleton } from "../components/Skeleton";
-import { PillGroup, SettingsSection, TextField, ToggleRow } from "../components/settings/fields";
+import { PillGroup, SettingsSection, TextField } from "../components/settings/fields";
 import { TradingSettings } from "../components/settings/TradingSettings";
-import { BellIcon, CpuIcon, LinkIcon, ServerIcon } from "../components/icons";
+import { CpuIcon, LinkIcon, ServerIcon } from "../components/icons";
 import { Button } from "../components/Button";
 
 export function SettingsPage() {
@@ -47,18 +47,6 @@ export function SettingsPage() {
           ))
         ) : (
           <>
-            <SettingsSection icon={<BellIcon className="h-4 w-4" />} title="通知">
-              <ToggleRow
-                label="日次サマリー"
-                description="1日の損益をまとめて通知します(未実装、準備中)"
-                checked={settings.discord.notifyOnDailySummary}
-                onChange={(v) => patch((p) => ({ ...p, discord: { ...p.discord, notifyOnDailySummary: v } }))}
-              />
-              <p className="pb-1 pt-2 text-xs text-ink-faint">
-                Discord連携の有効化・Webhook URL・取引ごとの通知・エラー通知は、上部の「Discord通知」に移動しました。
-              </p>
-            </SettingsSection>
-
             <SettingsSection icon={<ServerIcon className="h-4 w-4" />} title="VPS">
               <TextField
                 label="Host"

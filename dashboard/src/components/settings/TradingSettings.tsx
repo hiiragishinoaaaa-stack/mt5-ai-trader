@@ -288,6 +288,12 @@ export function TradingSettings() {
           checked={draft.DISCORD_NOTIFY_ON_ERROR}
           onChange={(v) => updateDraft({ DISCORD_NOTIFY_ON_ERROR: v })}
         />
+        <ToggleRow
+          label="日次サマリー"
+          description="1日1回、その日の損益サマリーを通知します"
+          checked={draft.DISCORD_NOTIFY_DAILY_SUMMARY}
+          onChange={(v) => updateDraft({ DISCORD_NOTIFY_DAILY_SUMMARY: v })}
+        />
       </Card>
 
       {banner ? (

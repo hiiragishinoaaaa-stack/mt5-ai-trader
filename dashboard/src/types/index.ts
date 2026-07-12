@@ -57,6 +57,7 @@ export interface TradingSettings {
   DISCORD_WEBHOOK_URL: string;
   DISCORD_NOTIFY_ON_TRADE: boolean;
   DISCORD_NOTIFY_ON_ERROR: boolean;
+  DISCORD_NOTIFY_DAILY_SUMMARY: boolean;
   BOT_RUN_STATE: BotRunState;
 }
 
@@ -129,13 +130,9 @@ export interface RealClosedTrade {
 }
 
 // --- ここから下はまだUIモックの設定(バックエンドと未接続) -------------------
-// Discordの enabled/webhookUrl/notifyOnTrade/notifyOnError は
-// TradingSettings(DISCORD_*)へ移動し実際に接続済み。ここに残っているのは
-// notifyOnDailySummaryのみ(まだ実装していない)。
-
-export interface DiscordSettings {
-  notifyOnDailySummary: boolean;
-}
+// Discordの設定(enabled/webhookUrl/notifyOnTrade/notifyOnError/
+// notifyOnDailySummary)はすべてTradingSettings(DISCORD_*)へ移動し
+// 実際に接続済みのため、ここにはもう残っていない。
 
 export interface VpsSettings {
   host: string;
@@ -158,7 +155,6 @@ export interface Mt5Settings {
 }
 
 export interface SettingsState {
-  discord: DiscordSettings;
   vps: VpsSettings;
   ai: AiSettings;
   mt5: Mt5Settings;

@@ -259,6 +259,11 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       「BOT_RUN_STATE=STOPPED のため判断・発注をスキップします」というログが
       流れ、AI判断表示が「停止中です」になる。STARTを押すと数サイクル後に
       通常のAI判断ログに戻る
+- [ ] `.env`で`DISCORD_NOTIFY_DAILY_SUMMARY=true`(またはDashboard Settingsの
+      「Discord通知」→「日次サマリー」をON)にしている場合、`DAILY_SUMMARY_HOUR`
+      (既定13時=UTC、22時JST相当)を過ぎるとDiscordへその日の損益サマリーが
+      1回だけ届く(`cat mt5_ai_trader/artemis_daily_summary_state.json`で
+      送信済み日付を確認できる)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

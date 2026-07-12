@@ -193,6 +193,41 @@ def test_run_once_skips_when_bot_run_state_emergency_stopped(monkeypatch):
     assert order_executor.calls == []
 
 
+def test_run_once_checks_daily_summary_every_cycle_regardless_of_bot_run_state(monkeypatch):
+    """BOT_RUN_STATEがRUNNINGでなくても、日次サマリー送信チェックは毎サイクル行う。"""
+    import daily_summary
+
+    calls = []
+    monkeypatch.setattr(daily_summary, "maybe_send_daily_summary", lambda feed: calls.append(feed))
+    monkeypatch.setattr(config, "BOT_RUN_STATE", "STOPPED")
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert len(calls) == 1
+
+
+def test_run_once_daily_summary_error_does_not_break_cycle(monkeypatch):
+    import daily_summary
+
+    def _raise(feed):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(daily_summary, "maybe_send_daily_summary", _raise)
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None  # 通常のサイクルはそのまま続行する
+
+
 def test_run_once_reloads_config_json_at_start(monkeypatch):
     """Dashboardからのconfig.json変更をサイクルの先頭で拾えることを確認する。"""
     calls = []

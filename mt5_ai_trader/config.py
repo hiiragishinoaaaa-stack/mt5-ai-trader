@@ -194,6 +194,19 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 DISCORD_NOTIFY_ON_TRADE = _env_bool("DISCORD_NOTIFY_ON_TRADE", True)
 DISCORD_NOTIFY_ON_ERROR = _env_bool("DISCORD_NOTIFY_ON_ERROR", True)
 
+# --- 日次サマリー通知(Phase 6) ---
+# DISCORD_ENABLEDとこの両方がtrueの場合、1日1回(DAILY_SUMMARY_HOURで
+# 指定した時刻(UTC・VPSのローカル時刻)以降の最初のサイクル)、その日
+# (UTC暦日)の損益サマリーをDiscordへ送信する。詳細はdaily_summary.pyを参照。
+DISCORD_NOTIFY_DAILY_SUMMARY = _env_bool("DISCORD_NOTIFY_DAILY_SUMMARY", False)
+DAILY_SUMMARY_HOUR = _env_int("DAILY_SUMMARY_HOUR", 13)  # 既定13時(UTC) = 22時(JST)
+_daily_summary_state_file_path_env = os.getenv("DAILY_SUMMARY_STATE_FILE_PATH")
+DAILY_SUMMARY_STATE_FILE_PATH = (
+    Path(_daily_summary_state_file_path_env)
+    if _daily_summary_state_file_path_env
+    else BASE_DIR / "artemis_daily_summary_state.json"
+)
+
 # --- Dashboard設定API(settings_server.py) ---
 _config_json_path_env = os.getenv("CONFIG_JSON_PATH")
 CONFIG_JSON_PATH = Path(_config_json_path_env) if _config_json_path_env else BASE_DIR / "config.json"

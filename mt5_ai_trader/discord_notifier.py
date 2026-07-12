@@ -50,3 +50,15 @@ def notify_order_failed(action: str, symbol: str, message: str) -> None:
     if not config.DISCORD_NOTIFY_ON_ERROR:
         return
     _send(f"⚠️ **発注失敗** {action} {symbol}\n{message}")
+
+
+def notify_daily_summary(date_str: str, total_profit: float, trade_count: int, win_rate: float) -> None:
+    """1日1回、その日の損益サマリーを送信する(daily_summary.pyから呼び出す)。"""
+    if not config.DISCORD_NOTIFY_DAILY_SUMMARY:
+        return
+    emoji = "\U0001f4c8" if total_profit >= 0 else "\U0001f4c9"  # chart up/down
+    _send(
+        f"{emoji} **{date_str} 日次サマリー**\n"
+        f"損益: {total_profit:+.2f}\n"
+        f"取引数: {trade_count}件 / 勝率: {win_rate:.0f}%"
+    )

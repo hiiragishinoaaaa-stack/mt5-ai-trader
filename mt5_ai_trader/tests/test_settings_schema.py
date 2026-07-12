@@ -35,6 +35,7 @@ def test_validate_accepts_all_valid_fields():
         "ENABLE_ORDERS": True,
         "DEMO_ONLY": True,
         "BOT_RUN_STATE": "STOPPED",
+        "DISCORD_NOTIFY_DAILY_SUMMARY": True,
     }
 
     cleaned, errors = settings_schema.validate(payload)
@@ -44,6 +45,7 @@ def test_validate_accepts_all_valid_fields():
     assert cleaned["TIMEFRAME"] == "H1"
     assert cleaned["ENABLE_ORDERS"] is True
     assert cleaned["BOT_RUN_STATE"] == "STOPPED"
+    assert cleaned["DISCORD_NOTIFY_DAILY_SUMMARY"] is True
 
 
 def test_validate_ignores_unknown_keys():
