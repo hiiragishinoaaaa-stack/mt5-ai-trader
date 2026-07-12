@@ -182,6 +182,11 @@ LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "trades.log"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# --- ボットの起動/停止(Phase 5: DashboardのSTART/STOP/EMERGENCY STOP) ---
+# RUNNING以外の場合、main.pyは判断・発注をスキップする(プロセス自体は
+# systemdサービスとして動き続ける。詳細はmain.py run_once()を参照)。
+BOT_RUN_STATE = os.getenv("BOT_RUN_STATE", "RUNNING")
+
 # --- Discord通知(Phase 4: 取引ごとの通知) ---
 # DISCORD_ENABLEDとWebhook URLの両方が設定されている場合のみ通知を送信する。
 DISCORD_ENABLED = _env_bool("DISCORD_ENABLED", False)

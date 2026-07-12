@@ -34,6 +34,7 @@ def test_validate_accepts_all_valid_fields():
         "EMA_SLOW_PERIOD": 20,
         "ENABLE_ORDERS": True,
         "DEMO_ONLY": True,
+        "BOT_RUN_STATE": "STOPPED",
     }
 
     cleaned, errors = settings_schema.validate(payload)
@@ -42,6 +43,7 @@ def test_validate_accepts_all_valid_fields():
     assert cleaned["ORDER_VOLUME"] == 0.05
     assert cleaned["TIMEFRAME"] == "H1"
     assert cleaned["ENABLE_ORDERS"] is True
+    assert cleaned["BOT_RUN_STATE"] == "STOPPED"
 
 
 def test_validate_ignores_unknown_keys():
@@ -89,6 +91,21 @@ def test_validate_rejects_invalid_entry_strictness_choice():
     cleaned, errors = settings_schema.validate({"ENTRY_STRICTNESS": "extreme"})
 
     assert "ENTRY_STRICTNESS" in errors
+
+
+def test_validate_accepts_all_bot_run_state_choices():
+    for choice in settings_schema.BOT_RUN_STATE_CHOICES:
+        cleaned, errors = settings_schema.validate({"BOT_RUN_STATE": choice})
+
+        assert errors == {}
+        assert cleaned["BOT_RUN_STATE"] == choice
+
+
+def test_validate_rejects_invalid_bot_run_state_choice():
+    cleaned, errors = settings_schema.validate({"BOT_RUN_STATE": "PAUSED"})
+
+    assert "BOT_RUN_STATE" in errors
+    assert "BOT_RUN_STATE" not in cleaned
 
 
 def test_validate_rejects_wrong_type():

@@ -37,6 +37,14 @@ config.json(settings_server.py経由でDashboardから書き込まれる)でも
 上書きできる(settings_schema.py参照)。run_once()の先頭で毎サイクル
 config.load_config_json()を呼び、config.jsonの更新日時が変わっていれば
 自動的に再読込する。詳細はREADME.mdの「Dashboardからの設定変更」を参照。
+
+## BOT_RUN_STATE(DashboardのSTART/STOP/EMERGENCY STOP)
+
+config.BOT_RUN_STATEがRUNNING以外(STOPPED/EMERGENCY_STOPPED)の場合、
+run_once()は価格取得・AI判断・発注を一切行わずWAITのai_statusだけを
+書き出して早期リターンする。プロセス自体(このmain.pyのループ、および
+systemdサービス)は動き続ける。詳細はREADME.mdの「Dashboardからの
+BOT起動/停止(Phase 5)」を参照。
 """
 from __future__ import annotations
 
@@ -137,6 +145,20 @@ def run_once(
             config.ENTRY_STRICTNESS,
             config.LOOP_INTERVAL_SECONDS,
         )
+
+    if config.BOT_RUN_STATE != "RUNNING":
+        reason = (
+            "緊急停止中です(DashboardのSTARTボタンで再開できます)"
+            if config.BOT_RUN_STATE == "EMERGENCY_STOPPED"
+            else "停止中です(DashboardのSTARTボタンで再開できます)"
+        )
+        signal = Signal(action="WAIT", reason=reason, details={})
+        try:
+            ai_status.write_status(signal, config.SYMBOL, config.TIMEFRAME)
+        except OSError:
+            logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
+        logger.info("BOT_RUN_STATE=%s のため判断・発注をスキップします", config.BOT_RUN_STATE)
+        return signal
 
     try:
         snapshot = feed.read_snapshot(config.SYMBOL, config.TIMEFRAME)

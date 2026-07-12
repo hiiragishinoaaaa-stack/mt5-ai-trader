@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
-import { emergencyStopBot, getBotState, startBot, stopBot } from "../api/client";
 import { useAccountState } from "../hooks/useAccountState";
 import { useAiStatus } from "../hooks/useAiStatus";
+import { useBotRunState } from "../hooks/useBotRunState";
 import { useTradeHistory } from "../hooks/useTradeHistory";
-import type { AiState, AiStatus, BotRunState } from "../types";
+import type { AiState, AiStatus } from "../types";
 import { AiStatusHero } from "../components/AiStatusHero";
 import { Header } from "../components/Header";
 import { StatCard } from "../components/StatCard";
@@ -29,34 +28,16 @@ const AI_STATE_LABEL: Record<AiState, string> = {
 };
 
 export function HomePage() {
-  const [botState, setBotState] = useState<BotRunState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [actionPending, setActionPending] = useState(false);
   const { status: acctStatus, state: acctState } = useAccountState();
   const { status: aiStatusStatus, aiStatus: realAiStatus } = useAiStatus();
   const { status: historyStatus, trades } = useTradeHistory();
+  const { status: botRunStatus, botRunState, actionPending, changeBotRunState } = useBotRunState();
 
-  async function refresh() {
-    const s = await getBotState();
-    setBotState(s);
-    setLoading(false);
-  }
+  const loading = botRunStatus === "loading";
 
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function runAction(action: () => Promise<unknown>) {
-    setActionPending(true);
-    await action();
-    await refresh();
-    setActionPending(false);
-  }
-
-  // 残高・ポジション・シンボル・AI判断・取引履歴はすべてMT5/main.py側の実データ。
-  // 取得できていない間は"—"やスケルトンにフォールバックする(botState/START・STOP
-  // ボタンだけはまだ実際のプロセス制御と繋がっていないモック)。
+  // 残高・ポジション・シンボル・AI判断・取引履歴・BOT_RUN_STATEはすべて
+  // MT5/main.py/settings_server.py側の実データ。取得できていない間は
+  // "—"やスケルトンにフォールバックする。
   const acctLoading = acctStatus === "loading";
   const acctReady = acctStatus === "ready" && acctState !== null;
   const primaryPosition =
@@ -81,9 +62,11 @@ export function HomePage() {
 
   const aiState: AiState = !acctReady && aiStatusStatus !== "ready" ? "IDLE" : primaryPosition ? "TRADING" : "MONITORING";
 
+  const botControlsDisabled = actionPending || loading || botRunStatus === "connection_error";
+
   return (
     <PageShell>
-      <Header botState={botState ?? undefined} />
+      <Header botState={botRunState ?? undefined} />
 
       <AiStatusHero status={aiStatus} loading={loading} />
 
@@ -150,8 +133,8 @@ export function HomePage() {
         <Button
           variant="primary"
           className="w-full"
-          disabled={actionPending || loading || botState === "RUNNING"}
-          onClick={() => runAction(startBot)}
+          disabled={botControlsDisabled || botRunState === "RUNNING"}
+          onClick={() => changeBotRunState("RUNNING")}
         >
           <PlayIcon className="h-4 w-4" />
           START
@@ -159,8 +142,8 @@ export function HomePage() {
         <Button
           variant="secondary"
           className="w-full"
-          disabled={actionPending || loading || botState !== "RUNNING"}
-          onClick={() => runAction(stopBot)}
+          disabled={botControlsDisabled || botRunState !== "RUNNING"}
+          onClick={() => changeBotRunState("STOPPED")}
         >
           <StopIcon className="h-4 w-4" />
           STOP
@@ -168,8 +151,8 @@ export function HomePage() {
         <Button
           variant="danger"
           className="w-full"
-          disabled={actionPending || loading || botState === "EMERGENCY_STOPPED"}
-          onClick={() => runAction(emergencyStopBot)}
+          disabled={botControlsDisabled || botRunState === "EMERGENCY_STOPPED"}
+          onClick={() => changeBotRunState("EMERGENCY_STOPPED")}
         >
           <AlertIcon className="h-4 w-4" />
           EMERGENCY STOP

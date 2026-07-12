@@ -21,6 +21,7 @@ def _patch_order_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ORDER_RESULT_FILE_PATH", tmp_path / "artemis_order_result.json")
     monkeypatch.setattr(config, "ENABLE_ORDERS", True)
     monkeypatch.setattr(config, "DEMO_ONLY", True)
+    monkeypatch.setattr(config, "BOT_RUN_STATE", "RUNNING")
     monkeypatch.setattr(config, "ORDER_VOLUME", 0.01)
     monkeypatch.setattr(config, "SL_POINTS", 200)
     monkeypatch.setattr(config, "TP_POINTS", 400)
@@ -64,6 +65,17 @@ def test_demo_only_false_does_not_write_request(monkeypatch):
 
 def test_enable_orders_false_does_not_write_request(monkeypatch):
     monkeypatch.setattr(config, "ENABLE_ORDERS", False)
+    executor = order_executor.FileOrderExecutor()
+
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+
+    assert result is None
+    assert not config.ORDER_REQUEST_FILE_PATH.exists()
+
+
+@pytest.mark.parametrize("bot_run_state", ["STOPPED", "EMERGENCY_STOPPED"])
+def test_bot_run_state_not_running_does_not_write_request(monkeypatch, bot_run_state):
+    monkeypatch.setattr(config, "BOT_RUN_STATE", bot_run_state)
     executor = order_executor.FileOrderExecutor()
 
     result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))

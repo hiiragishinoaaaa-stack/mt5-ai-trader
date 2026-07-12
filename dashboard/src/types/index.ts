@@ -57,6 +57,7 @@ export interface TradingSettings {
   DISCORD_WEBHOOK_URL: string;
   DISCORD_NOTIFY_ON_TRADE: boolean;
   DISCORD_NOTIFY_ON_ERROR: boolean;
+  BOT_RUN_STATE: BotRunState;
 }
 
 // --- 実際にPython側(account_feed.py経由でEAが書き出すJSON)から取得する

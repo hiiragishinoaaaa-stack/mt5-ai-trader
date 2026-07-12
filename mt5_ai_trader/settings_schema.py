@@ -17,6 +17,11 @@ from typing import Any
 
 TIMEFRAME_CHOICES = ("M1", "M5", "M15", "M30", "H1", "H4", "D1")
 
+# DashboardのHome画面のSTART/STOP/EMERGENCY STOPボタンと1:1対応する。
+# STOPPED/EMERGENCY_STOPPEDのときmain.pyは判断・発注をスキップする
+# (プロセス自体は動き続ける。詳細はmain.py run_once()を参照)。
+BOT_RUN_STATE_CHOICES = ("RUNNING", "STOPPED", "EMERGENCY_STOPPED")
+
 # Entry Strictness(エントリーの厳しさ)プリセット。選択するとRSI_OVERBOUGHT/
 # RSI_OVERSOLDがこの値に上書きされる(payloadにRSI値も明示的に含まれていた
 # 場合はそちらを優先する。validate()を参照)。
@@ -54,6 +59,7 @@ FIELDS: dict[str, FieldSpec] = {
     "DISCORD_WEBHOOK_URL": FieldSpec("DISCORD_WEBHOOK_URL", str),
     "DISCORD_NOTIFY_ON_TRADE": FieldSpec("DISCORD_NOTIFY_ON_TRADE", bool),
     "DISCORD_NOTIFY_ON_ERROR": FieldSpec("DISCORD_NOTIFY_ON_ERROR", bool),
+    "BOT_RUN_STATE": FieldSpec("BOT_RUN_STATE", str, choices=BOT_RUN_STATE_CHOICES),
 }
 
 

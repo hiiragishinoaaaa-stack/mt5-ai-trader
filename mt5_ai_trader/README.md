@@ -317,6 +317,7 @@ ARTEMIS X Dashboard(`../dashboard/`)のSettings画面から、コードや`.env`
 | `ENTRY_STRICTNESS` | エントリーの厳しさプリセット | conservative(65/35) / balanced(70/30) / aggressive(80/20)。選択するとRSI_OVERBOUGHT/OVERSOLDに反映される |
 | `ENABLE_ORDERS` | 発注そのものを行うか | true/false |
 | `DEMO_ONLY` | 対象口座がデモであること | true/false |
+| `BOT_RUN_STATE` | Bot稼働状態(DashboardのSTART/STOP/EMERGENCY STOP) | RUNNING/STOPPED/EMERGENCY_STOPPED。詳細は「DashboardのSTART/STOP/EMERGENCY STOP(Phase 5)」を参照 |
 
 `RSI_OVERBOUGHT`は`RSI_OVERSOLD`より大きい値、`EMA_FAST_PERIOD`は
 `EMA_SLOW_PERIOD`より小さい値である必要があり、範囲外・矛盾した値は
@@ -419,6 +420,35 @@ Analytics画面へ返す(新しい順)。MT5は発注理由を知らないため
 警告を出すだけで、発注処理そのものには影響しない。これらの設定は
 DashboardのSettings画面(「Discord通知」)から変更でき、`.env`と同じく
 `config.json`経由でも上書きできる(`settings_schema.FIELDS`を参照)。
+
+## DashboardのSTART/STOP/EMERGENCY STOP(Phase 5)
+
+DashboardのHome画面のSTART/STOPボタンは、`settings_schema.py`のFIELDSに
+追加した`BOT_RUN_STATE`(`RUNNING` / `STOPPED` / `EMERGENCY_STOPPED`)を
+既存の`GET/POST /api/settings`経由で読み書きするだけで実現している。
+新しい専用エンドポイントは追加していない。
+
+- Dashboardのボタンを押すと`POST /api/settings`で`BOT_RUN_STATE`が
+  変更され、`config.json`へ保存される。
+- `main.py`は`run_once()`の先頭(`config.load_config_json()`の直後)で
+  `config.BOT_RUN_STATE`を確認し、`RUNNING`以外の場合は価格取得・AI判断・
+  発注を一切行わず、`WAIT`のai_status(「停止中です」/「緊急停止中です」)
+  だけを書き出して早期リターンする。プロセス自体(`main.py`のループ、
+  および対応するsystemdサービス)は動き続けるため、Dashboardから再度
+  `START`を押せば即座に再開する。
+- `order_executor.submit_if_needed()`側にも同じチェックを多層防御として
+  入れている(通常は`main.py`側で既にスキップされるため到達しないが、
+  直接呼び出された場合に備えたもの)。
+
+### なぜsystemdサービスの起動/停止そのものではないのか
+
+`settings_server.py`はデフォルトで認証なし(`SETTINGS_API_TOKEN`未設定)
+でも動作するHTTPサーバーであるため、これがsudo/polkit経由でsystemdの
+サービスを直接起動・停止できるようにすると、権限昇格の攻撃面になり得る。
+そのため、プロセスそのものは常に動かし続けたまま「判断・発注だけを
+止める」ソフトポーズ方式を採用している。VPSのSSH/systemdからの本当の
+プロセス停止(`sudo systemctl stop artemis-bot`)は、これまで通り
+サーバー管理者の操作としてのみ行う。
 
 ## テスト(Windows以外でも実行可能)
 

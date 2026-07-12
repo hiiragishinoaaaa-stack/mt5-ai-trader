@@ -164,6 +164,35 @@ def test_run_once_without_force_signal_keeps_normal_ai_decision(monkeypatch):
     assert order_executor.calls[0][0].action == "WAIT"
 
 
+def test_run_once_skips_when_bot_run_state_stopped(monkeypatch):
+    monkeypatch.setattr(config, "BOT_RUN_STATE", "STOPPED")
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None
+    assert signal.action == "WAIT"
+    assert feed.calls == 0  # 価格取得すら行わない
+    assert order_executor.calls == []  # submit_if_needed自体呼ばれない
+
+
+def test_run_once_skips_when_bot_run_state_emergency_stopped(monkeypatch):
+    monkeypatch.setattr(config, "BOT_RUN_STATE", "EMERGENCY_STOPPED")
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None
+    assert signal.action == "WAIT"
+    assert "緊急停止中" in signal.reason
+    assert feed.calls == 0
+    assert order_executor.calls == []
+
+
 def test_run_once_reloads_config_json_at_start(monkeypatch):
     """Dashboardからのconfig.json変更をサイクルの先頭で拾えることを確認する。"""
     calls = []

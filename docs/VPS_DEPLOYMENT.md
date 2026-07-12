@@ -255,6 +255,10 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       勝率・プロフィットファクターが表示される(`curl http://127.0.0.1:8787/api/trade-history`
       が200を返すか確認。503の場合はEAが古い場合があるので、`ea/ARTEMIS_Bridge.mq5`
       をv4.00以降に再コンパイル・再適用したか確認する)
+- [ ] DashboardのHome画面のSTOPボタンを押すと、`journalctl -u artemis-bot -f`に
+      「BOT_RUN_STATE=STOPPED のため判断・発注をスキップします」というログが
+      流れ、AI判断表示が「停止中です」になる。STARTを押すと数サイクル後に
+      通常のAI判断ログに戻る
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`
