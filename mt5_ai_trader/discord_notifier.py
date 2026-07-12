@@ -18,6 +18,10 @@ import config
 logger = logging.getLogger("mt5_ai_trader")
 
 _REQUEST_TIMEOUT_SECONDS = 5
+# discord.com手前のCloudflareが、urllib標準のUser-Agent(例: "Python-urllib/3.12")
+# を自動化されたアクセスとみなして403(error code: 1010)で拒否するため、
+# 一般的なブラウザのUser-Agentを明示的に指定する。
+_USER_AGENT = "Mozilla/5.0 (compatible; ARTEMIS-Bot/1.0)"
 
 
 def _send(content: str) -> None:
@@ -28,7 +32,7 @@ def _send(content: str) -> None:
     req = urllib.request.Request(
         config.DISCORD_WEBHOOK_URL,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
         method="POST",
     )
     try:

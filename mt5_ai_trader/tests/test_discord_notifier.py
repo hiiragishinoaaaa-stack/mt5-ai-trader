@@ -30,6 +30,19 @@ def test_notify_trade_executed_sends_when_enabled(monkeypatch):
     assert calls[0].full_url == "https://discord.example.com/webhook"
 
 
+def test_send_sets_user_agent_to_avoid_cloudflare_403(monkeypatch):
+    """discord.com手前のCloudflareは、urllib標準のUser-Agentを自動化アクセスとみなし
+    403(error code: 1010)で拒否するため、ブラウザ相当のUser-Agentを送る必要がある。
+    """
+    calls = []
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: calls.append(req))
+
+    discord_notifier.notify_trade_executed("BUY", "USDJPY", 0.01, 12345, "order sent")
+
+    assert len(calls) == 1
+    assert calls[0].get_header("User-agent") not in (None, "", "Python-urllib/3.12")
+
+
 def test_notify_trade_executed_skips_when_disabled(monkeypatch):
     monkeypatch.setattr(config, "DISCORD_ENABLED", False)
     calls = []
