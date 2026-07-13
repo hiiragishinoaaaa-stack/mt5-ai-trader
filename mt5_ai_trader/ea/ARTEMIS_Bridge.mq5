@@ -37,6 +37,14 @@
 //| This path does not depend on which broker's terminal build is    |
 //| running, or on the terminal's per-install data-folder hash.       |
 //|                                                                    |
+//| All timestamps written to these JSON files go through             |
+//| ToUtcEpoch(), which corrects MQL5's server-clock datetimes         |
+//| (TimeCurrent(), POSITION_TIME, DEAL_TIME, bar times, ...) to true  |
+//| UTC via TimeGMTOffset(). Without this, every timestamp the         |
+//| Dashboard/Python side reads would be off by the broker server's    |
+//| UTC offset (commonly a few hours), since Python/JS always treat    |
+//| these integers as true UTC epoch seconds.                          |
+//|                                                                    |
 //| All file writes (market data, order result) are made atomic by    |
 //| first writing to a temporary file and then renaming it with       |
 //| FileMove(), so Python never reads a half-written file.             |
@@ -49,7 +57,7 @@
 //| explanation of this EA instead.                                   |
 //+------------------------------------------------------------------+
 #property copyright "ARTEMIS"
-#property version   "4.01"
+#property version   "4.02"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -182,6 +190,24 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
 }
 
 //+------------------------------------------------------------------+
+//| All MQL5 datetime values (TimeCurrent(), POSITION_TIME,           |
+//| DEAL_TIME, bar times from CopyRates, ...) are expressed in the    |
+//| trade server's own clock, which is commonly offset from true UTC  |
+//| (many brokers run their servers a few hours ahead, e.g. UTC+2/+3).|
+//| Every place in this EA that writes a Unix-epoch integer into a    |
+//| JSON file for Python/the Dashboard to consume must go through     |
+//| this helper, since the Python/JS side always treats that integer  |
+//| as a true UTC epoch (time.time(), new Date(epoch*1000), daily     |
+//| summary UTC day-boundary math, staleness checks, etc.). Without   |
+//| this correction, every displayed/compared timestamp is off by     |
+//| the server's UTC offset.                                          |
+//+------------------------------------------------------------------+
+long ToUtcEpoch(datetime server_time)
+{
+   return (long)server_time - TimeGMTOffset();
+}
+
+//+------------------------------------------------------------------+
 string JsonEscape(string value)
 {
    StringReplace(value, "\\", "\\\\");
@@ -295,11 +321,11 @@ void WriteMarketData()
    string json = "{";
    json += "\"symbol\":\"" + JsonEscape(InpSymbol) + "\",";
    json += "\"timeframe\":\"" + TimeframeToString(InpTimeframe) + "\",";
-   json += "\"updated_at\":" + IntegerToString((long)TimeCurrent()) + ",";
+   json += "\"updated_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
    json += "\"tick\":{";
    json += "\"bid\":" + DoubleToString(tick.bid, _Digits) + ",";
    json += "\"ask\":" + DoubleToString(tick.ask, _Digits) + ",";
-   json += "\"time\":" + IntegerToString((long)tick.time);
+   json += "\"time\":" + IntegerToString(ToUtcEpoch(tick.time));
    json += "},";
    json += "\"candles\":[";
    for(int i = 0; i < copied; i++)
@@ -307,7 +333,7 @@ void WriteMarketData()
       if(i > 0)
          json += ",";
       json += "{";
-      json += "\"time\":" + IntegerToString((long)rates[i].time) + ",";
+      json += "\"time\":" + IntegerToString(ToUtcEpoch(rates[i].time)) + ",";
       json += "\"open\":" + DoubleToString(rates[i].open, _Digits) + ",";
       json += "\"high\":" + DoubleToString(rates[i].high, _Digits) + ",";
       json += "\"low\":" + DoubleToString(rates[i].low, _Digits) + ",";
@@ -349,7 +375,7 @@ void WriteAccountState()
    }
 
    string json = "{";
-   json += "\"updated_at\":" + IntegerToString((long)TimeCurrent()) + ",";
+   json += "\"updated_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
    json += "\"account\":{";
    json += "\"login\":" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + ",";
    json += "\"currency\":\"" + JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)) + "\",";
@@ -389,7 +415,7 @@ void WriteAccountState()
       json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
       json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
       json += "\"profit\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
-      json += "\"open_time\":" + IntegerToString((long)PositionGetInteger(POSITION_TIME)) + ",";
+      json += "\"open_time\":" + IntegerToString(ToUtcEpoch((datetime)PositionGetInteger(POSITION_TIME))) + ",";
       json += "\"magic\":" + IntegerToString((long)PositionGetInteger(POSITION_MAGIC)) + ",";
       json += "\"is_artemis\":" + ((PositionGetInteger(POSITION_MAGIC) == (long)InpMagicNumber) ? "true" : "false");
       json += "}";
@@ -466,7 +492,7 @@ void WriteTradeHistory()
    ArrayResize(entries, 0);
 
    string json = "{";
-   json += "\"updated_at\":" + IntegerToString((long)TimeCurrent()) + ",";
+   json += "\"updated_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
    json += "\"trades\":[";
 
    int written = 0;
@@ -491,7 +517,7 @@ void WriteTradeHistory()
          e.type        = (deal_type == DEAL_TYPE_BUY) ? "BUY" : "SELL";
          e.volume      = HistoryDealGetDouble(deal_ticket, DEAL_VOLUME);
          e.price       = HistoryDealGetDouble(deal_ticket, DEAL_PRICE);
-         e.time        = (long)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
+         e.time        = ToUtcEpoch((datetime)HistoryDealGetInteger(deal_ticket, DEAL_TIME));
 
          int n = ArraySize(entries);
          ArrayResize(entries, n + 1);
@@ -518,7 +544,7 @@ void WriteTradeHistory()
       double profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT)
                      + HistoryDealGetDouble(deal_ticket, DEAL_SWAP)
                      + HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION);
-      long close_time = (long)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
+      long close_time = ToUtcEpoch((datetime)HistoryDealGetInteger(deal_ticket, DEAL_TIME));
       long magic = HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
 
       if(written > 0)
@@ -685,7 +711,7 @@ void WriteOrderResult(string request_id, bool success, string message, long retc
 
    string json = "{";
    json += "\"request_id\":\"" + JsonEscape(request_id) + "\",";
-   json += "\"processed_at\":" + IntegerToString((long)TimeCurrent()) + ",";
+   json += "\"processed_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
    json += "\"success\":" + (success ? "true" : "false") + ",";
    json += "\"retcode\":" + IntegerToString(retcode) + ",";
    json += "\"ticket\":" + IntegerToString(ticket) + ",";

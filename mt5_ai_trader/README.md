@@ -588,6 +588,31 @@ DashboardのSettings画面の「発注設定」→「Max Concurrent Positions」
 複数ポジション分の損失が同時に発生しうる(リスクが増える)。値を大きくする
 前に、SL/TPの幅とのバランスを考慮すること。
 
+## EAが書き出す時刻をUTCに補正(Phase 9.1)
+
+MQL5の`TimeCurrent()`・`POSITION_TIME`・`DEAL_TIME`・ローソク足の`time`は、
+いずれも**取引サーバー自身の時計**を返す。多くのブローカーはこのサーバー
+時計をUTCではないタイムゾーン(UTC+2/+3等)に設定しているため、これを
+そのままUTCのUnixエポック秒として書き出すと、Python/Dashboard側
+(`time.time()`・`new Date(epoch*1000)`・日次サマリーのUTC暦日判定等、
+すべて真のUTCを前提とする)で解釈した時刻がサーバーのUTCオフセット分
+ズレる(数時間単位)。
+
+`ARTEMIS_Bridge.mq5`(**v4.02以降**)は、時刻を書き出す全箇所で
+`ToUtcEpoch()`(`TimeGMTOffset()`でサーバー時刻をUTCへ補正するヘルパー)
+を経由するようにした。これにより:
+
+- Dashboardの「OPENED」「決済時刻」等の表示が実際の時刻と一致するようになる
+- `daily_summary.py`のUTC暦日での取引集計、`close_notifier.py`の新規決済
+  判定が、実際の決済時刻を正しく基準にするようになる
+- `MARKET_DATA_MAX_STALENESS_SECONDS`等の鮮度チェック(`time.time() - updated_at`)
+  が、サーバーのUTCオフセット分だけ実態とズレていた問題が解消される
+  (オフセットがプラスの場合、実際には古いデータでも新しく見えてしまう
+  ことがあった)
+
+**EAがv4.02より前の場合、この補正は行われず、表示時刻・鮮度判定に
+ブローカーのUTCオフセット分のズレが残る。**
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

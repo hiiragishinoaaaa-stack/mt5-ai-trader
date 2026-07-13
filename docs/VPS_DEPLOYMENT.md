@@ -278,6 +278,10 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       ままだと常に1件までしか保有できず、2件目以降の発注は
       `skipped: max_positions reached`ではなく古いメッセージのまま
       スキップされる)
+- [ ] DashboardのTrade画面の「OPENED」等の時刻が、実際に発注した時刻と
+      一致している(要EA v4.02以降。それより古いEAだとブローカーのサーバー
+      時刻とUTCのズレの分だけ表示時刻がズレる。ズレていたらEAを
+      再コンパイル・再適用する)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`
