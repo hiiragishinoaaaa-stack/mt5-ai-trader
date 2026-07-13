@@ -71,8 +71,9 @@ class FileTradeHistoryFeed:
         updated_at = payload.get("updated_at")
         if updated_at is None:
             raise TradeHistoryError("取引履歴ファイルにupdated_atがありません(壊れている可能性があります)")
+        updated_at = config.correct_ea_timestamp(float(updated_at))
 
-        age_seconds = time.time() - float(updated_at)
+        age_seconds = time.time() - updated_at
         if age_seconds > max_staleness_seconds:
             raise TradeHistoryError(
                 f"取引履歴が古すぎます(最終更新から{age_seconds:.0f}秒経過、"
@@ -92,8 +93,8 @@ class FileTradeHistoryFeed:
                 price_open=float(t["price_open"]),
                 price_close=float(t["price_close"]),
                 profit=float(t["profit"]),
-                open_time=int(t["open_time"]),
-                close_time=int(t["close_time"]),
+                open_time=config.correct_ea_timestamp(t["open_time"]),
+                close_time=config.correct_ea_timestamp(t["close_time"]),
                 magic=int(t["magic"]),
                 is_artemis=bool(t["is_artemis"]),
             )

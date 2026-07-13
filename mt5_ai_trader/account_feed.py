@@ -84,8 +84,9 @@ class FileAccountFeed:
         updated_at = payload.get("updated_at")
         if updated_at is None:
             raise AccountFeedError("口座情報ファイルにupdated_atがありません(壊れている可能性があります)")
+        updated_at = config.correct_ea_timestamp(float(updated_at))
 
-        age_seconds = time.time() - float(updated_at)
+        age_seconds = time.time() - updated_at
         if age_seconds > max_staleness_seconds:
             raise AccountFeedError(
                 f"口座情報が古すぎます(最終更新から{age_seconds:.0f}秒経過、"
@@ -118,7 +119,7 @@ class FileAccountFeed:
                 sl=float(p["sl"]),
                 tp=float(p["tp"]),
                 profit=float(p["profit"]),
-                open_time=int(p["open_time"]),
+                open_time=config.correct_ea_timestamp(p["open_time"]),
                 magic=int(p["magic"]),
                 is_artemis=bool(p["is_artemis"]),
             )

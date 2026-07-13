@@ -71,6 +71,21 @@ def _common_files_dir() -> Path:
 # 使用しない。代わりにMT5上で動くEA(ea/ARTEMIS_Bridge.mq5)がJSONファイル
 # 経由で価格データの提供と発注リクエストの実行を行う
 # (詳細はmarket_feed.py / order_executor.pyを参照)。
+
+# EA側のToUtcEpoch()(MQL5のTimeGMTOffset()を使ったサーバー時刻→UTC変換)が、
+# 環境によっては実際のズレを正しく補正しきれず、EAが書き出す全ての
+# updated_at/open_time/close_time等が真のUTCより一定時間先行することが
+# ある(Wine環境で確認済み)。EA側を直さずPython側だけで運用できるよう、
+# ここで測定済みのズレ(秒)を引いて補正する(0なら補正なし)。実測値は
+# 「VPSの`date -u`」と「EAが書き出したJSON内のepoch値」を比較して求める。
+EA_TIMESTAMP_CORRECTION_SECONDS = _env_int("EA_TIMESTAMP_CORRECTION_SECONDS", 0)
+
+
+def correct_ea_timestamp(epoch_seconds: float) -> int:
+    """EAが書き出したepoch秒から、既知のズレ(EA_TIMESTAMP_CORRECTION_SECONDS)を引く。"""
+    return int(epoch_seconds) - EA_TIMESTAMP_CORRECTION_SECONDS
+
+
 _market_data_file_path_env = os.getenv("MARKET_DATA_FILE_PATH")
 MARKET_DATA_FILE_PATH = (
     Path(_market_data_file_path_env)

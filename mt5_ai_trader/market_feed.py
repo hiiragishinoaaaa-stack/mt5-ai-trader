@@ -96,8 +96,9 @@ class FileMarketFeed:
         updated_at = payload.get("updated_at")
         if updated_at is None:
             raise MarketFeedError("データファイルにupdated_atがありません(壊れている可能性があります)")
+        updated_at = config.correct_ea_timestamp(float(updated_at))
 
-        age_seconds = time.time() - float(updated_at)
+        age_seconds = time.time() - updated_at
         if age_seconds > max_staleness_seconds:
             raise MarketFeedError(
                 f"データが古すぎます(最終更新から{age_seconds:.0f}秒経過、"
@@ -120,10 +121,11 @@ class FileMarketFeed:
             symbol=symbol,
             bid=float(tick_data["bid"]),
             ask=float(tick_data["ask"]),
-            time=datetime.fromtimestamp(float(tick_data["time"])),
+            time=datetime.fromtimestamp(config.correct_ea_timestamp(float(tick_data["time"]))),
         )
 
         df = pd.DataFrame(candles_data, columns=_CANDLE_COLUMNS)
+        df["time"] = df["time"].apply(config.correct_ea_timestamp)
         df["time"] = pd.to_datetime(df["time"], unit="s")
 
         return MarketSnapshot(tick=tick, candles=df)
