@@ -273,6 +273,11 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       場合Discordへ決済通知が届く(要EA v4.00以降。`curl http://127.0.0.1:8787/api/trade-history`
       が200を返すか確認。404/503ならEAが古い可能性が高いので、
       `ea/ARTEMIS_Bridge.mq5`をv4.00以降に再コンパイル・再適用する)
+- [ ] Dashboard SettingsでMax Concurrent Positionsを2以上にした場合、
+      同じ銘柄で複数ポジションを同時に保有できる(要EA v4.01以降。古いEAの
+      ままだと常に1件までしか保有できず、2件目以降の発注は
+      `skipped: max_positions reached`ではなく古いメッセージのまま
+      スキップされる)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

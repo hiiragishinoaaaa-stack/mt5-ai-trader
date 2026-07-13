@@ -291,7 +291,7 @@ python main.py --debug
 | `DEMO_ONLY=falseのため発注をスキップします` | `.env`またはDashboardの「発注設定」で`DEMO_ONLY=true`を設定 |
 | `rejected: this account is not recognized as a demo account` | MT5がライブ口座にログインしているか、`ACCOUNT_TRADE_MODE`の既知の誤判定(上記STEP6の注記を参照)。デモ口座であることを確認できたら`InpConfirmedDemoAccount`を設定する |
 | `rejected: demo_only flag was not true` | 通常発生しない(Python側のバグの可能性)。Issueで報告してほしい |
-| `skipped: a position already exists for this symbol` | 想定通りの動作(仕様どおり重複発注しない) |
+| `skipped: max_positions reached (N/M) for this symbol` | 想定通りの動作(`MAX_CONCURRENT_POSITIONS`件まで同時保有したら以降はスキップする。要EA v4.01以降) |
 | `%s秒待っても結果を確認できませんでした` | `InpEnableOrders=true`になっているか、EAが稼働しているか確認 |
 
 ## Dashboardからの設定変更(settings_server.py)
@@ -560,6 +560,33 @@ Anthropicは https://console.anthropic.com/settings/keys 。
 - 初回起動時(状態ファイルが無いとき)は、既存の決済済み取引をまとめて
   通知せず、その時点の最新`close_time`を基準値として記録するだけに留める
   (導入した瞬間に過去分がまとめて届く「後追いスパム」を防ぐため)。
+
+## 同時ポジション数の上限(Phase 9)
+
+既定では、同じ銘柄でARTEMISが同時に保有できるポジションは1つまでだった
+(2つ目のBUY/SELLシグナルは、最初のポジションが決済されるまで無視される)。
+これを`MAX_CONCURRENT_POSITIONS`(既定1、1〜10)で変更できるようにした。
+DashboardのSettings画面の「発注設定」→「Max Concurrent Positions」からも
+変更できる(`settings_schema.FIELDS`)。
+
+### 仕組み
+
+- `order_executor.py`が発注リクエストJSONに`max_positions`
+  (=`config.MAX_CONCURRENT_POSITIONS`)を含めて送出する。
+- EA(`ARTEMIS_Bridge.mq5`、**v4.01以降が必要**)が`CountArtemisPositions()`
+  で、その銘柄における自分自身(`InpMagicNumber`が一致する)の現在の
+  保有ポジション数を数え、`max_positions`に達していれば新規発注を
+  `skipped: max_positions reached (N/M) for this symbol`として拒否する。
+  実際のカウント・強制は常にEA側が行う(Python側はMT5の口座状態を
+  一切知り得ないため)。
+- **EAがv4.00以前の場合、この値は無視され、常に上限1(=今までの挙動)
+  として動作する**(古いEAは`max_positions`フィールド自体を認識しない)。
+
+### 注意
+
+同時に複数ポジションを持てるようにすると、トレンドが反転した場合に
+複数ポジション分の損失が同時に発生しうる(リスクが増える)。値を大きくする
+前に、SL/TPの幅とのバランスを考慮すること。
 
 ## テスト(Windows以外でも実行可能)
 

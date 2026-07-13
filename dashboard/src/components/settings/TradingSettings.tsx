@@ -279,6 +279,18 @@ export function TradingSettings() {
             disabled={saving}
           />
         </div>
+        <NumberField
+          label="Max Concurrent Positions"
+          step={1}
+          suffix="件"
+          value={draft.MAX_CONCURRENT_POSITIONS}
+          onChange={(v) => updateDraft({ MAX_CONCURRENT_POSITIONS: v })}
+          error={errors.MAX_CONCURRENT_POSITIONS}
+          disabled={saving}
+        />
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          同じ銘柄で同時に保有できるポジション数の上限(1〜10)。実際のカウント・強制はEA側(v4.01以降)が行う。
+        </span>
       </Card>
 
       <Card className="flex flex-col gap-1">

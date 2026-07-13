@@ -10,7 +10,8 @@ EMERGENCY STOPボタン(Bot稼働状態)は、いずれもPython側の`settings_
 `mt5_ai_trader/README.md`の「Dashboardからの設定変更(settings_server.py)」
 「DashboardのAI判断・取引履歴・Discord通知(Phase 4)」「DashboardのSTART/
 STOP/EMERGENCY STOP(Phase 5)」「日次サマリー通知(Phase 6)」「AI判断エンジン:
-OpenAI/Claude連携(Phase 7)」「決済通知(Phase 8)」を参照)。VPS/MT5参考情報
+OpenAI/Claude連携(Phase 7)」「決済通知(Phase 8)」「同時ポジション数の上限
+(Phase 9)」を参照)。VPS/MT5参考情報
 はまだUIモック。
 
 スマホでの片手操作を最優先に設計した、ダーク基調・ミニマルなダッシュボード。

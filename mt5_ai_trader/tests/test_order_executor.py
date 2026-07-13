@@ -25,6 +25,7 @@ def _patch_order_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ORDER_VOLUME", 0.01)
     monkeypatch.setattr(config, "SL_POINTS", 200)
     monkeypatch.setattr(config, "TP_POINTS", 400)
+    monkeypatch.setattr(config, "MAX_CONCURRENT_POSITIONS", 3)
     monkeypatch.setattr(config, "ORDER_RESULT_WAIT_SECONDS", 2.0)
     monkeypatch.setattr(order_executor, "_RESULT_POLL_INTERVAL_SECONDS", 0.05)
 
@@ -109,6 +110,7 @@ def test_buy_signal_writes_request_with_expected_fields():
     assert request["volume"] == 0.01
     assert request["sl_points"] == 200
     assert request["tp_points"] == 400
+    assert request["max_positions"] == 3
     assert request["demo_only"] is True
 
     assert result is not None

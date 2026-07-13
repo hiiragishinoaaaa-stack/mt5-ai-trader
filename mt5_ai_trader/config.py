@@ -125,6 +125,10 @@ ORDER_VOLUME = _env_float("ORDER_VOLUME", 0.01)
 # (シンボルのpoint/桁数はEA側の方が正確に把握できるため)。0以下ならSL/TPなし。
 SL_POINTS = _env_int("SL_POINTS", 200)
 TP_POINTS = _env_int("TP_POINTS", 400)
+# 同じ銘柄で同時に保有できるARTEMIS自身のポジション数の上限。EA側が実際の
+# カウント・強制(超過分の発注拒否)を行う(要EA v4.01以降)。旧バージョンの
+# EAはこの値を無視し、常に上限1として動作する。
+MAX_CONCURRENT_POSITIONS = _env_int("MAX_CONCURRENT_POSITIONS", 1)
 _order_request_file_path_env = os.getenv("ORDER_REQUEST_FILE_PATH")
 ORDER_REQUEST_FILE_PATH = (
     Path(_order_request_file_path_env)

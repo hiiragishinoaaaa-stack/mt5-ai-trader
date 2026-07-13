@@ -26,6 +26,7 @@ def test_validate_accepts_all_valid_fields():
         "ORDER_VOLUME": 0.05,
         "SL_POINTS": 150,
         "TP_POINTS": 300,
+        "MAX_CONCURRENT_POSITIONS": 3,
         "TIMEFRAME": "H1",
         "LOOP_INTERVAL_SECONDS": 30,
         "RSI_OVERBOUGHT": 72.0,
@@ -48,6 +49,21 @@ def test_validate_accepts_all_valid_fields():
     assert cleaned["BOT_RUN_STATE"] == "STOPPED"
     assert cleaned["DISCORD_NOTIFY_DAILY_SUMMARY"] is True
     assert cleaned["AI_ENGINE"] == "openai"
+    assert cleaned["MAX_CONCURRENT_POSITIONS"] == 3
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"MAX_CONCURRENT_POSITIONS": 0},  # min(1)未満
+        {"MAX_CONCURRENT_POSITIONS": 11},  # max(10)超過
+    ],
+)
+def test_validate_rejects_out_of_range_max_concurrent_positions(payload):
+    cleaned, errors = settings_schema.validate(payload)
+
+    assert "MAX_CONCURRENT_POSITIONS" in errors
+    assert "MAX_CONCURRENT_POSITIONS" not in cleaned
 
 
 def test_validate_ignores_unknown_keys():

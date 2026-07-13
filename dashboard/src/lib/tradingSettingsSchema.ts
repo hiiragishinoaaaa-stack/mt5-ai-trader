@@ -17,6 +17,7 @@ export const NUMERIC_RANGES: Record<string, FieldRange> = {
   ORDER_VOLUME: { min: 0.01, max: 100 },
   SL_POINTS: { min: 0, max: 100_000 },
   TP_POINTS: { min: 0, max: 100_000 },
+  MAX_CONCURRENT_POSITIONS: { min: 1, max: 10 },
   LOOP_INTERVAL_SECONDS: { min: 5, max: 86_400 },
   RSI_OVERBOUGHT: { min: 50, max: 100 },
   RSI_OVERSOLD: { min: 0, max: 50 },

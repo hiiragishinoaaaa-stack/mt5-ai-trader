@@ -24,8 +24,13 @@
 //|                                                                    |
 //| Order execution is OFF by default (InpEnableOrders=false) and,    |
 //| even when enabled, this EA refuses to place any order unless the  |
-//| connected account is verified to be a DEMO account. It also       |
-//| refuses to open a second position for the same symbol.            |
+//| connected account is verified to be a DEMO account. It also caps  |
+//| how many of this EA's own positions may be open at once for the   |
+//| same symbol: each order request from Python carries a             |
+//| "max_positions" value (Python config.MAX_CONCURRENT_POSITIONS,    |
+//| Dashboard-adjustable), and this EA counts its own open positions  |
+//| (matched by InpMagicNumber) for that symbol and rejects the       |
+//| request if the count has already reached that limit.              |
 //|                                                                    |
 //| The shared folder is normally:                                    |
 //|   %APPDATA%\MetaQuotes\Terminal\Common\Files\                    |
@@ -44,7 +49,7 @@
 //| explanation of this EA instead.                                   |
 //+------------------------------------------------------------------+
 #property copyright "ARTEMIS"
-#property version   "4.00"
+#property version   "4.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -402,6 +407,33 @@ void WriteAccountState()
 }
 
 //+------------------------------------------------------------------+
+//| Counts this EA's own open positions (matched by InpMagicNumber)   |
+//| for the given symbol. Used by ProcessOrderRequest() to enforce    |
+//| max_positions. Manually-opened or other-EA positions on the same  |
+//| symbol are not counted, matching the is_artemis distinction used  |
+//| elsewhere (WriteAccountState/WriteTradeHistory).                  |
+//+------------------------------------------------------------------+
+int CountArtemisPositions(string symbol)
+{
+   int count = 0;
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagicNumber)
+         continue;
+      count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
 //| Phase 4: write recently closed trades (matched entry/exit deal    |
 //| pairs) so the Dashboard can show real order history / stats       |
 //| instead of mock data. MQL5 has no built-in map type, so entry     |
@@ -564,7 +596,11 @@ void ProcessOrderRequest()
    double volume      = JsonGetNumberValue(json, "volume", 0.0);
    double sl_points   = JsonGetNumberValue(json, "sl_points", 0.0);
    double tp_points   = JsonGetNumberValue(json, "tp_points", 0.0);
+   int    max_positions = (int)JsonGetNumberValue(json, "max_positions", 1.0);
    bool   demo_only   = JsonGetBoolValue(json, "demo_only", false);
+
+   if(max_positions < 1)
+      max_positions = 1; // older Python builds may omit this field; also guards against a bad/zero value
 
    if(request_id == "")
    {
@@ -600,9 +636,12 @@ void ProcessOrderRequest()
       WriteOrderResult(request_id, false, "rejected: invalid volume", 0, 0);
       return;
    }
-   if(PositionSelect(symbol))
+   int existing_positions = CountArtemisPositions(symbol);
+   if(existing_positions >= max_positions)
    {
-      WriteOrderResult(request_id, false, "skipped: a position already exists for this symbol", 0, 0);
+      WriteOrderResult(request_id, false,
+                        "skipped: max_positions reached (" + IntegerToString(existing_positions) +
+                        "/" + IntegerToString(max_positions) + ") for this symbol", 0, 0);
       return;
    }
 

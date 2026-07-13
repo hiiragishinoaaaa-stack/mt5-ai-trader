@@ -49,6 +49,7 @@ export interface TradingSettings {
   ORDER_VOLUME: number;
   SL_POINTS: number;
   TP_POINTS: number;
+  MAX_CONCURRENT_POSITIONS: number;
   TIMEFRAME: Timeframe;
   LOOP_INTERVAL_SECONDS: number;
   RSI_OVERBOUGHT: number;

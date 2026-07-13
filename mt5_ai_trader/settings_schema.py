@@ -51,6 +51,7 @@ FIELDS: dict[str, FieldSpec] = {
     "ORDER_VOLUME": FieldSpec("ORDER_VOLUME", float, min_value=0.01, max_value=100.0),
     "SL_POINTS": FieldSpec("SL_POINTS", int, min_value=0, max_value=100_000),
     "TP_POINTS": FieldSpec("TP_POINTS", int, min_value=0, max_value=100_000),
+    "MAX_CONCURRENT_POSITIONS": FieldSpec("MAX_CONCURRENT_POSITIONS", int, min_value=1, max_value=10),
     "TIMEFRAME": FieldSpec("TIMEFRAME", str, choices=TIMEFRAME_CHOICES),
     "LOOP_INTERVAL_SECONDS": FieldSpec("LOOP_INTERVAL_SECONDS", int, min_value=5, max_value=86_400),
     "RSI_OVERBOUGHT": FieldSpec("RSI_OVERBOUGHT", float, min_value=50.0, max_value=100.0),
