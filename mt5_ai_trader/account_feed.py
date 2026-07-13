@@ -56,6 +56,13 @@ class Position:
 class AccountState:
     account: AccountInfo
     positions: list[Position]
+    # EAが最後にこのファイルを書いた時刻(補正済み、config.correct_ea_timestamp
+    # 適用後)。risk_manager.pyが「今」の基準として使う場合がある(EA由来の
+    # open_time/close_timeと同じ時計・同じ補正定数で比較することで、補正定数
+    # 自体の精度に依存せず経過時間を正しく計算できるようにするため。詳細は
+    # risk_manager.check_entry_allowed()参照)。既定0.0は後方互換用
+    # (テストや古い呼び出し元がこの引数を渡さない場合)。
+    updated_at: float = 0.0
 
 
 class FileAccountFeed:
@@ -134,7 +141,7 @@ class FileAccountFeed:
             age_seconds,
         )
 
-        return AccountState(account=account, positions=positions)
+        return AccountState(account=account, positions=positions, updated_at=updated_at)
 
     def _read_json_with_retry(self, file_path: Path) -> dict:
         last_error: Exception | None = None

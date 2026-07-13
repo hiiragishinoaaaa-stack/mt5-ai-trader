@@ -76,7 +76,19 @@ def check_entry_allowed(
     """
     history_feed = history_feed or FileTradeHistoryFeed()
     account_feed = account_feed or FileAccountFeed()
-    now = now if now is not None else time.time()
+
+    if now is None:
+        # EAが最後にファイルを書いた時刻(account_stateのupdated_at)を「今」の
+        # 基準に使う。open_time/close_timeも同じEA由来・同じ補正定数
+        # (config.EA_TIMESTAMP_CORRECTION_SECONDS)で補正されているため、
+        # その定数が不正確(あるいはEA側のサーバー時刻ズレが時間とともに
+        # 変化する)場合でも、両者の差である経過時間は正しく計算できる
+        # (定数の誤差が両辺で相殺されるため)。account_stateが読めない場合
+        # のみtime.time()にフォールバックする。
+        try:
+            now = account_feed.read_state().updated_at
+        except AccountFeedError:
+            now = time.time()
 
     try:
         all_trades = history_feed.read_history()
