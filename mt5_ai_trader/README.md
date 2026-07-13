@@ -639,6 +639,36 @@ TradeページのポジションカードにあるCLOSEボタンから、ARTEMIS
 - 現時点では「その銘柄のARTEMIS自身の全ポジションを一括決済」のみに
   対応する(特定の1ポジションだけを選んで決済する機能は無い)。
 
+## DashboardからのTIMEFRAME変更をPCなしで反映(Phase 11)
+
+Phase 10まで、Settings画面の「AI判断ロジック」TIMEFRAMEを変更しても、
+Python側(判断ロジックが使う値)が変わるだけで、MT5から実際に取得される
+ローソク足の時間軸(EA側の`InpTimeframe`)は変わらなかった。これを変える
+には、MT5ターミナルでEAの入力パラメータ画面を開いて`InpTimeframe`を
+手動で変更する必要があり、PC/MT5画面が無いと反映できなかった。**要EA
+v4.04以降。**
+
+### 仕組み
+
+- main.pyが各サイクルの先頭(`config.load_config_json()`の直後)で、
+  `ea_config_writer.write_ea_config(config.TIMEFRAME)`を呼び出し、
+  現在のTIMEFRAMEを`artemis_ea_config.json`(`EA_CONFIG_FILE_PATH`)へ
+  書き出す。`BOT_RUN_STATE`の値に関わらず(停止中でも)毎サイクル書き出す
+  ため、Bot停止中にDashboardでTIMEFRAMEを変えても次にSTARTした時には
+  既に同期済みになっている。
+- EA(`ProcessEaConfig()`、`OnTimer()`の先頭で毎回呼ばれる)がこの
+  ファイルを読み込み、`timeframe`の値が現在使用中の時間軸
+  (`g_active_timeframe`)と異なれば切り替える。以降、`CopyRates()`と
+  マーケットデータファイルの`timeframe`ラベルは全て`g_active_timeframe`
+  を参照する(コンパイル時の`InpTimeframe`は、このファイルが存在しない
+  場合の初期値としてのみ使われる)。
+- ファイルが無い・壊れている・未知の値の場合はEAは現在の時間軸を維持する
+  (フェイルセーフ、エラーにはしない)。
+- **EA v4.03以前のまま**の場合、Settings画面のTIMEFRAME変更はPython側の
+  ラベル表示にしか反映されない(実際のローソク足取得時間軸は変わらない)。
+  v4.04へのEA再コンパイル・再設置が必要(手順はREADME/デプロイ手順の
+  「MT5でのEA再設置」を参照)。
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

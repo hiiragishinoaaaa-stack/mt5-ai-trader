@@ -161,6 +161,20 @@ CLOSE_RESULT_FILE_PATH = (
     else _common_files_dir() / "artemis_close_result.json"
 )
 
+# --- EA設定の動的反映(Phase 11: TIMEFRAME変更をPCなしで反映) ---
+# main.pyが毎サイクル、現在のconfig.TIMEFRAMEをこのファイルへ書き出す
+# (ea_config_writer.py参照)。EA(v4.04以降)がOnTimer()の度にこのファイルを
+# 読み込み、実際にCopyRatesへ渡す時間軸を動的に切り替える。これにより、
+# DashboardでTIMEFRAMEを変更するだけでMT5側の再コンパイル・GUI操作なしに
+# 反映されるようになる(要EA v4.04以降。それより前のEAはInpTimeframeの
+# コンパイル時の値のまま固定)。
+_ea_config_file_path_env = os.getenv("EA_CONFIG_FILE_PATH")
+EA_CONFIG_FILE_PATH = (
+    Path(_ea_config_file_path_env)
+    if _ea_config_file_path_env
+    else _common_files_dir() / "artemis_ea_config.json"
+)
+
 # --- 発注テスト用モード ---
 # 通常のAI判断(BUY/SELL/WAIT)を上書きして強制する。空欄なら無効で、既存の
 # AI判断ロジックのまま動作する。値の妥当性チェックとDEMO_ONLYとの組み合わせは

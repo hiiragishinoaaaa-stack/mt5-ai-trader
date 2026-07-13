@@ -73,6 +73,7 @@ import ai_status
 import close_notifier
 import config
 import daily_summary
+import ea_config_writer
 import indicators
 from ai_engine import Signal, get_ai_engine
 from logger import setup_logger
@@ -165,6 +166,11 @@ def run_once(
             config.ENTRY_STRICTNESS,
             config.LOOP_INTERVAL_SECONDS,
         )
+
+    try:
+        ea_config_writer.write_ea_config(config.TIMEFRAME)
+    except OSError:
+        logger.exception("EA設定ファイルの書き出しに失敗しました(TIMEFRAMEの自動反映のみに影響)")
 
     history_feed = trade_history_feed or FileTradeHistoryFeed()
 

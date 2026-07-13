@@ -166,6 +166,8 @@ mt5_ai_trader/artemis_ai_status.json
 mt5_ai_trader/artemis_daily_summary_state.json
 # ARTEMIS: 決済通知の送信済み状態(close_notifier.py)。
 mt5_ai_trader/artemis_close_notifier_state.json
+# ARTEMIS: main.pyが各サイクルで書き出すEA向けTIMEFRAME設定(ea_config_writer.py)。
+mt5_ai_trader/artemis_ea_config.json
 .venv
 env/
 venv/

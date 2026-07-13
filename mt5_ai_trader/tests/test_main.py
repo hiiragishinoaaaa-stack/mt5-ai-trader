@@ -263,6 +263,44 @@ def test_run_once_daily_summary_error_does_not_break_cycle(monkeypatch):
     assert signal is not None  # 通常のサイクルはそのまま続行する
 
 
+def test_run_once_writes_ea_config_every_cycle_regardless_of_bot_run_state(monkeypatch):
+    """BOT_RUN_STATEがRUNNINGでなくても、EA向けTIMEFRAME反映は毎サイクル行う
+    (PCなしでDashboardのTIMEFRAME変更をEAへ伝えるため、停止中でも同期は続ける)。
+    """
+    import ea_config_writer
+
+    calls = []
+    monkeypatch.setattr(ea_config_writer, "write_ea_config", lambda tf: calls.append(tf))
+    monkeypatch.setattr(config, "TIMEFRAME", "M1")
+    monkeypatch.setattr(config, "BOT_RUN_STATE", "STOPPED")
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert calls == ["M1"]
+
+
+def test_run_once_ea_config_write_error_does_not_break_cycle(monkeypatch):
+    import ea_config_writer
+
+    def _raise(timeframe):
+        raise OSError("boom")
+
+    monkeypatch.setattr(ea_config_writer, "write_ea_config", _raise)
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None  # 通常のサイクルはそのまま続行する
+
+
 def test_run_once_reloads_config_json_at_start(monkeypatch):
     """Dashboardからのconfig.json変更をサイクルの先頭で拾えることを確認する。"""
     calls = []

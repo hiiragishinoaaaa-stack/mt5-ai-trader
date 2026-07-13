@@ -218,8 +218,9 @@ export function TradingSettings() {
           options={TIMEFRAME_OPTIONS.map((tf) => ({ value: tf, label: tf }))}
         />
         <span className="-mt-1 pb-2 text-xs text-ink-faint">
-          MT5のEA(ARTEMIS_Bridge.mq5)のInpTimeframeも同じ値に設定してください。ここだけを変えても実際に取得される
-          ローソク足の時間軸は変わりません。
+          EA(ARTEMIS_Bridge.mq5)がv4.04以降なら、ここを変えるだけで次サイクルから自動的にMT5側にも反映されます
+          (PC・MetaEditorの操作は不要)。v4.03以前のEAでは、MT5のEAのInpTimeframeも手動で同じ値に設定しない限り、
+          ここだけ変えても実際に取得されるローソク足の時間軸は変わりません。
         </span>
         <NumberField
           label="Loop Interval"

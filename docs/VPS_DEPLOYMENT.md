@@ -286,6 +286,13 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       確認ダイアログの後にMT5上のポジションが実際に決済される(要EA
       v4.03以降。古いEAだとボタンを押しても`EAからの応答がタイムアウト
       しました`のまま失敗する)
+- [ ] Dashboard SettingsでTIMEFRAMEを変更すると、PC/MetaEditorを一切
+      操作しなくても数十秒後(LOOP_INTERVAL_SECONDS程度)にMT5上のEAが
+      実際に取得するローソク足の時間軸も切り替わる(要EA v4.04以降。
+      `journalctl -u artemis-bot -f`に変更直後の値が反映されているか、
+      `cat <common_files_dir>/artemis_ea_config.json`で`timeframe`が
+      最新の値になっているか確認。古いEAのままだとPython側のラベル表示
+      のみ変わり、実際の時間軸は`InpTimeframe`の値のまま変わらない)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

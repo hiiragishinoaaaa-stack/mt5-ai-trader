@@ -27,6 +27,16 @@
 //|     open positions for the configured symbol. Uses a separate     |
 //|     request/result file pair from the AI's own order flow so the  |
 //|     two never collide.                                            |
+//|  6) Dynamic timeframe (Phase 11): reads a small config JSON file   |
+//|     written every cycle by Python (ea_config_writer.py) and, if it |
+//|     names a valid timeframe, uses it (via g_active_timeframe)      |
+//|     instead of the compiled-in InpTimeframe for CopyRates() and    |
+//|     the timeframe label in the market-data file. This lets the     |
+//|     Dashboard's TIMEFRAME setting take effect without needing to   |
+//|     recompile or re-attach this EA in MetaEditor/MT5. If the file  |
+//|     is missing or unreadable (e.g. Python has not started yet, or  |
+//|     an older Python version that predates this feature), this EA   |
+//|     simply keeps using InpTimeframe as before.                     |
 //|                                                                    |
 //| Order execution is OFF by default (InpEnableOrders=false) and,    |
 //| even when enabled, this EA refuses to place any order unless the  |
@@ -63,7 +73,7 @@
 //| explanation of this EA instead.                                   |
 //+------------------------------------------------------------------+
 #property copyright "ARTEMIS"
-#property version   "4.03"
+#property version   "4.04"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -74,6 +84,9 @@ input ENUM_TIMEFRAMES  InpTimeframe         = PERIOD_M15;                  // Ti
 input int              InpBarsCount         = 100;                        // Number of candles to export
 input int              InpUpdateIntervalSec = 1;                          // Write interval (seconds)
 input string           InpFileName          = "artemis_market_data.json"; // Market data output file (common folder)
+
+//--- dynamic timeframe settings (Phase 11: Dashboard TIMEFRAME without recompiling)
+input string           InpEaConfigFile      = "artemis_ea_config.json";   // Config file written by Python (ea_config_writer.py, common folder)
 
 //--- account/position state settings (Phase 3: Dashboard balance/positions)
 input string           InpAccountStateFile  = "artemis_account_state.json"; // Account+position output file (common folder)
@@ -104,11 +117,13 @@ string   g_tmp_file_name;
 bool     g_orders_effectively_enabled = false;
 CTrade   g_trade;
 datetime g_last_trade_history_write = 0;
+ENUM_TIMEFRAMES g_active_timeframe = PERIOD_M15; // overwritten with InpTimeframe in OnInit()
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
    g_tmp_file_name = InpFileName + ".tmp";
+   g_active_timeframe = InpTimeframe;
 
    if(!SymbolSelect(InpSymbol, true))
    {
@@ -139,7 +154,7 @@ int OnInit()
    WriteMarketData(); // write once immediately so Python does not have to wait for the first timer tick
    WriteAccountState();
    WriteTradeHistory();
-   Print("ARTEMIS: started. symbol=", InpSymbol, " timeframe=", TimeframeToString(InpTimeframe),
+   Print("ARTEMIS: started. symbol=", InpSymbol, " timeframe=", TimeframeToString(g_active_timeframe),
          " file=", InpFileName, " orders_enabled=", g_orders_effectively_enabled, " (common folder)");
    return INIT_SUCCEEDED;
 }
@@ -153,6 +168,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   ProcessEaConfig();
    WriteMarketData();
    WriteAccountState();
    if(TimeCurrent() - g_last_trade_history_write >= InpTradeHistoryIntervalSec)
@@ -196,6 +212,63 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
    string s = EnumToString(tf); // e.g. "PERIOD_M15"
    StringReplace(s, "PERIOD_", "");
    return s;
+}
+
+//+------------------------------------------------------------------+
+//| Inverse of TimeframeToString(): "M15" -> PERIOD_M15, etc.        |
+//| Returns false (leaving out unchanged) if the string does not      |
+//| match one of the timeframes offered by the Dashboard's TIMEFRAME  |
+//| picker (settings_schema.TIMEFRAME_CHOICES).                       |
+//+------------------------------------------------------------------+
+bool StringToTimeframe(string s, ENUM_TIMEFRAMES &out)
+{
+   if(s == "M1")  { out = PERIOD_M1;  return true; }
+   if(s == "M5")  { out = PERIOD_M5;  return true; }
+   if(s == "M15") { out = PERIOD_M15; return true; }
+   if(s == "M30") { out = PERIOD_M30; return true; }
+   if(s == "H1")  { out = PERIOD_H1;  return true; }
+   if(s == "H4")  { out = PERIOD_H4;  return true; }
+   if(s == "D1")  { out = PERIOD_D1;  return true; }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 11: reads the small config file Python (ea_config_writer.py)|
+//| rewrites every main.py cycle and, if it names a valid timeframe   |
+//| different from the one currently in use, switches g_active_       |
+//| timeframe. This lets the Dashboard's TIMEFRAME setting take       |
+//| effect without recompiling or re-attaching this EA. If the file   |
+//| is missing/unreadable/invalid, g_active_timeframe is left as-is   |
+//| (falls back to InpTimeframe, set once in OnInit()).                |
+//+------------------------------------------------------------------+
+void ProcessEaConfig()
+{
+   int handle = FileOpen(InpEaConfigFile, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+      return; // not written yet (older Python, or main.py not started) - keep current timeframe
+
+   string content = "";
+   while(!FileIsEnding(handle))
+      content += FileReadString(handle);
+   FileClose(handle);
+
+   string requested = JsonGetStringValue(content, "timeframe");
+   if(requested == "")
+      return;
+
+   ENUM_TIMEFRAMES new_timeframe;
+   if(!StringToTimeframe(requested, new_timeframe))
+   {
+      Print("ARTEMIS: WARNING - ea config file named unknown timeframe '", requested, "', ignoring");
+      return;
+   }
+
+   if(new_timeframe != g_active_timeframe)
+   {
+      Print("ARTEMIS: timeframe changed via Dashboard: ", TimeframeToString(g_active_timeframe),
+            " -> ", TimeframeToString(new_timeframe));
+      g_active_timeframe = new_timeframe;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -313,7 +386,7 @@ void WriteMarketData()
    // (index 0 = oldest bar). The Python side (indicators.py) expects
    // that same chronological order.
    MqlRates rates[];
-   int copied = CopyRates(InpSymbol, InpTimeframe, 0, InpBarsCount, rates);
+   int copied = CopyRates(InpSymbol, g_active_timeframe, 0, InpBarsCount, rates);
    if(copied <= 0)
    {
       Print("ARTEMIS: failed to copy rates, last_error=", GetLastError());
@@ -329,7 +402,7 @@ void WriteMarketData()
 
    string json = "{";
    json += "\"symbol\":\"" + JsonEscape(InpSymbol) + "\",";
-   json += "\"timeframe\":\"" + TimeframeToString(InpTimeframe) + "\",";
+   json += "\"timeframe\":\"" + TimeframeToString(g_active_timeframe) + "\",";
    json += "\"updated_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
    json += "\"tick\":{";
    json += "\"bid\":" + DoubleToString(tick.bid, _Digits) + ",";
