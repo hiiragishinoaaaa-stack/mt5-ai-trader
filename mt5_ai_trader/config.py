@@ -260,8 +260,66 @@ RSI_OVERSOLD = _env_float("RSI_OVERSOLD", 30.0)
 MACD_FAST_PERIOD = _env_int("MACD_FAST_PERIOD", 12)
 MACD_SLOW_PERIOD = _env_int("MACD_SLOW_PERIOD", 26)
 MACD_SIGNAL_PERIOD = _env_int("MACD_SIGNAL_PERIOD", 9)
-# エントリーの厳しさのプリセット名(conservative/balanced/aggressive)。
-# 数値としての効果はRSI_OVERBOUGHT/RSI_OVERSOLDに反映される
+ATR_PERIOD = _env_int("ATR_PERIOD", 14)
+
+# --- エントリー条件のスコアリング方式(RuleBasedAIEngine) ---
+# 「必須条件」(全て満たす必要がある)と「加点条件」(REQUIRED_SCORE点以上で
+# エントリー候補)に分けて判断する。RSI_BUY_MIN/MAX・RSI_SELL_MIN/MAX・
+# REQUIRED_SCORE・REQUIRE_NO_NEW_EXTREME_5BARSは、いずれもENTRY_STRICTNESS
+# プリセット(settings_schema.ENTRY_STRICTNESS_PRESETS)経由で一括設定される
+# ことを想定した値で、個別にも上書きできる。詳細はai_engine.RuleBasedAIEngine
+# のdocstringを参照。
+RSI_BUY_MIN = _env_float("RSI_BUY_MIN", 50.0)
+RSI_BUY_MAX = _env_float("RSI_BUY_MAX", 65.0)
+RSI_SELL_MIN = _env_float("RSI_SELL_MIN", 35.0)
+RSI_SELL_MAX = _env_float("RSI_SELL_MAX", 50.0)
+# 必須条件を満たした上で、加点条件(5つ、各1点)が何点以上ならエントリー
+# 候補とするか。
+REQUIRED_SCORE = _env_int("REQUIRED_SCORE", 3)
+# 直近5本(最新を除く)の安値/高値を更新していないことを追加の必須条件に
+# するかどうか(取引回数を大きく減らすため、conservativeプリセットのみtrue)。
+REQUIRE_NO_NEW_EXTREME_5BARS = _env_bool("REQUIRE_NO_NEW_EXTREME_5BARS", False)
+# ブローカーの1pointあたりの価格(例: USDJPYで3桁ブローカーなら0.001)。
+# ATR(価格単位)をpoints単位のSL/TPへ変換するために使う。実際のブローカー
+# の値と一致していないとSL/TP幅がずれるため、Dashboard Settingsで必ず
+# 確認・調整すること。
+POINT_SIZE = _env_float("POINT_SIZE", 0.001)
+# 現在のスプレッド(EAが書き出す直近ローソク足のspread列、points単位)が
+# この値を超える場合はエントリーしない。0以下で無効。
+MAX_SPREAD_POINTS = _env_float("MAX_SPREAD_POINTS", 30.0)
+# ATR(points換算)がこの値未満(値動きが小さすぎる)の場合はエントリーしない。
+# 0以下で無効。
+ATR_MIN_POINTS = _env_float("ATR_MIN_POINTS", 0.0)
+
+# --- SL/TP方式(order_executor.py) ---
+# fixed: 従来通りSL_POINTS/TP_POINTS固定。atr: ATR(14)×倍率で毎回動的に計算。
+STOP_MODE = os.getenv("STOP_MODE", "fixed")
+ATR_SL_MULTIPLIER = _env_float("ATR_SL_MULTIPLIER", 1.2)
+ATR_TP_MULTIPLIER = _env_float("ATR_TP_MULTIPLIER", 1.8)
+# ブローカーの最小ストップ距離(points)。ATRベースで計算したSL/TPがこれを
+# 下回る場合はこの値まで引き上げる。0で補正なし(EA側は現在この検証を
+# 行っていないため、値が小さすぎると発注がブローカーに拒否される可能性がある)。
+BROKER_MIN_STOP_POINTS = _env_int("BROKER_MIN_STOP_POINTS", 0)
+
+# --- エントリー頻度の制御・サーキットブレーカー(risk_manager.py) ---
+# 同一銘柄で新規エントリーしてから次のエントリーまで最低これだけ間隔を空ける
+# (秒)。0で無効。
+ENTRY_COOLDOWN_SECONDS = _env_int("ENTRY_COOLDOWN_SECONDS", 0)
+# 直近1時間/1日に新規オープンした回数がこれを超えたら新規エントリーを止める。
+# 0で無効。
+MAX_TRADES_PER_HOUR = _env_int("MAX_TRADES_PER_HOUR", 0)
+MAX_TRADES_PER_DAY = _env_int("MAX_TRADES_PER_DAY", 0)
+# その日(UTC日付)の決済済み損益の合計が、残高に対してこの%以上のマイナスに
+# 達したら、その日は新規エントリーを止める。0以下で無効。
+MAX_DAILY_LOSS_PERCENT = _env_float("MAX_DAILY_LOSS_PERCENT", 0.0)
+# 直近LOSS_STREAK_THRESHOLD回連続で損切りになった場合、
+# COOLDOWN_AFTER_LOSSES_MINUTES分だけ新規エントリーを止める。
+# COOLDOWN_AFTER_LOSSES_MINUTES=0で無効。
+LOSS_STREAK_THRESHOLD = _env_int("LOSS_STREAK_THRESHOLD", 3)
+COOLDOWN_AFTER_LOSSES_MINUTES = _env_int("COOLDOWN_AFTER_LOSSES_MINUTES", 0)
+
+# エントリーの厳しさのプリセット名(conservative/balanced/aggressive/active_m5)。
+# 数値としての効果は上記のRSI_BUY_MIN/MAX等に反映される
 # (settings_schema.ENTRY_STRICTNESS_PRESETSを参照)。この値自体は
 # ai_engine.pyの判断ロジックには使われず、Dashboard表示用の記録値。
 ENTRY_STRICTNESS = os.getenv("ENTRY_STRICTNESS", "balanced")

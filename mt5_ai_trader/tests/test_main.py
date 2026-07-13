@@ -129,7 +129,7 @@ class _RecordingOrderExecutor:
     def __init__(self):
         self.calls: list[tuple[Signal, str, str | None]] = []
 
-    def submit_if_needed(self, signal, symbol, request_id=None):
+    def submit_if_needed(self, signal, symbol, atr_price=None, request_id=None):
         self.calls.append((signal, symbol, request_id))
         return None
 
@@ -314,3 +314,148 @@ def test_run_once_reloads_config_json_at_start(monkeypatch):
     main_module.run_once(feed, ai_engine, order_executor)
 
     assert len(calls) == 1
+
+
+# --- risk_manager連携 ---------------------------------------------------------
+
+
+class _BuySignalAiEngine:
+    def decide(self, df):
+        return Signal("BUY", "テスト用の強制BUY", {})
+
+
+def test_run_once_blocks_order_when_risk_manager_denies(monkeypatch):
+    """risk_managerがエントリーを許可しない場合、BUY/SELLはWAITへ差し替えられ、
+    order_executorへは送出されない。
+    """
+    import risk_manager
+
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    monkeypatch.setattr(
+        risk_manager,
+        "check_entry_allowed",
+        lambda symbol, history_feed, account_feed: risk_manager.RiskCheckResult(False, "クールダウン中です(テスト)"),
+    )
+
+    feed = _FakeFeed()
+    ai_engine = _BuySignalAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None
+    assert signal.action == "WAIT"
+    assert "クールダウン中です(テスト)" in signal.reason
+    assert order_executor.calls[0][0].action == "WAIT"  # BUYはWAITに差し替えられて渡される
+
+
+def test_run_once_submits_order_when_risk_manager_allows(monkeypatch):
+    import risk_manager
+
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    monkeypatch.setattr(
+        risk_manager,
+        "check_entry_allowed",
+        lambda symbol, history_feed, account_feed: risk_manager.RiskCheckResult(True),
+    )
+
+    feed = _FakeFeed()
+    ai_engine = _BuySignalAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    signal = main_module.run_once(feed, ai_engine, order_executor)
+
+    assert signal is not None
+    assert signal.action == "BUY"
+    assert order_executor.calls[0][0].action == "BUY"
+
+
+def test_run_once_does_not_call_risk_manager_for_wait_signal(monkeypatch):
+    """WAIT判断の場合、risk_managerは呼ばれない(不要なファイル読み込みを避ける)。"""
+    import risk_manager
+
+    calls = []
+    monkeypatch.setattr(
+        risk_manager,
+        "check_entry_allowed",
+        lambda symbol, history_feed, account_feed: calls.append(symbol) or risk_manager.RiskCheckResult(True),
+    )
+
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()  # 常にWAIT
+    order_executor = _RecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert calls == []
+
+
+# --- ATRベースのSL/TP連携 -----------------------------------------------------
+
+
+class _FakeFeedWithAtr:
+    """high/low列を含む(=ATRが計算できる)価格データを返すフェイクfeed。"""
+
+    def read_snapshot(self, symbol, timeframe):
+        import pandas as pd
+
+        n = 30
+        closes = [150.0 + i * 0.01 for i in range(n)]
+        df = pd.DataFrame(
+            {
+                "close": closes,
+                "high": [c + 0.05 for c in closes],
+                "low": [c - 0.05 for c in closes],
+            }
+        )
+
+        class _Tick:
+            bid = closes[-1]
+            ask = closes[-1] + 0.003
+
+        class _Snapshot:
+            tick = _Tick()
+            candles = df
+
+        return _Snapshot()
+
+
+class _AtrRecordingOrderExecutor:
+    def __init__(self):
+        self.calls: list[tuple[Signal, str, float | None]] = []
+
+    def submit_if_needed(self, signal, symbol, atr_price=None, request_id=None):
+        self.calls.append((signal, symbol, atr_price))
+        return None
+
+
+def test_run_once_passes_computed_atr_to_order_executor(monkeypatch):
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+
+    feed = _FakeFeedWithAtr()
+    ai_engine = _BuySignalAiEngine()
+    order_executor = _AtrRecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert len(order_executor.calls) == 1
+    _, _, atr_price = order_executor.calls[0]
+    assert atr_price is not None
+    assert atr_price > 0
+
+
+def test_run_once_atr_price_is_none_when_high_low_unavailable(monkeypatch):
+    """high/low列が無い(ATRが計算できない)フィードでは、atr_price=Noneのまま
+    渡される(order_executor側でfixedモードにフォールバックする)。
+    """
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+
+    feed = _FakeFeed()  # close列のみ
+    ai_engine = _BuySignalAiEngine()
+    order_executor = _AtrRecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)
+
+    assert len(order_executor.calls) == 1
+    _, _, atr_price = order_executor.calls[0]
+    assert atr_price is None

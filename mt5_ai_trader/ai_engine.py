@@ -48,45 +48,178 @@ class AIEngine(ABC):
         raise NotImplementedError
 
 
+_BONUS_CONDITION_COUNT = 5
+
+
 class RuleBasedAIEngine(AIEngine):
-    """EMAトレンド + MACDモメンタム + RSIフィルターによるルールベース判断。"""
+    """必須条件(全て満たす必要がある) + 加点条件(2段階目のスコアリング)で
+    BUY/SELL/WAITを判断するルールベースエンジン。
+
+    ENTRY_STRICTNESSプリセット(conservative/balanced/aggressive/active_m5、
+    settings_schema.ENTRY_STRICTNESS_PRESETS参照)によって、RSI帯域や
+    必要スコア・EMA/ATR期間・(conservativeのみ)直近5本の高安値フィルターが
+    切り替わる。
+
+    ## 必須条件(BUY)
+    1. ema_fast > ema_slow(上昇トレンド)
+    2. close >= ema_fast(押し目からの回復)
+    3. RSI_BUY_MIN <= rsi <= RSI_BUY_MAX(過熱・売られすぎの両端を除外)
+    4. spread <= MAX_SPREAD_POINTS(MAX_SPREAD_POINTS<=0なら無効)
+    5. ATR(points換算) >= ATR_MIN_POINTS(ATR_MIN_POINTS<=0なら無効)
+    6. (REQUIRE_NO_NEW_EXTREME_5BARS有効時のみ)直近5本(最新を除く)の
+       安値を更新していない
+    SELLはBUYの左右対称(EMA/RSI/高安値の向きが逆)。
+
+    ## 加点条件(各1点、最大5点)
+    1. MACDヒストグラムが方向と一致(BUYなら>0、SELLなら<0)
+    2. MACDヒストグラムが前足よりその方向へ拡大
+    3. 直近ローソク足の実体が方向と一致(陽線/陰線)
+    4. EMA(短期)の傾きが方向と一致(前足より上/下)
+    5. 直近3本の安値(BUY)/高値(SELL)がその方向へ切り上がって/切り下がっている
+
+    必須条件を全て満たし、加点スコアがREQUIRED_SCORE以上ならBUY/SELL、
+    そうでなければWAITを返す。
+    """
 
     def decide(self, df: pd.DataFrame) -> Signal:
         if df.empty:
             return Signal("WAIT", "ローソク足データが空です", {})
 
+        required_cols = ("open", "close", "high", "low", "ema_fast", "ema_slow", "rsi", "macd_hist")
         latest = df.iloc[-1]
-        required = ("close", "ema_fast", "ema_slow", "rsi", "macd", "macd_signal", "macd_hist")
-        missing = [col for col in required if col not in df.columns or pd.isna(latest[col])]
+        missing = [col for col in required_cols if col not in df.columns or pd.isna(latest[col])]
         if missing:
             return Signal("WAIT", f"指標が未計算です: {missing}", {})
 
-        details = {col: float(latest[col]) for col in required}
+        details = {col: float(latest[col]) for col in required_cols}
+        if "atr" in df.columns and not pd.isna(latest["atr"]):
+            details["atr"] = float(latest["atr"])
+        if "spread" in df.columns and not pd.isna(latest["spread"]):
+            details["spread"] = float(latest["spread"])
 
-        uptrend = latest["ema_fast"] > latest["ema_slow"]
-        downtrend = latest["ema_fast"] < latest["ema_slow"]
-        macd_bullish = latest["macd_hist"] > 0
-        macd_bearish = latest["macd_hist"] < 0
-        rsi_not_overbought = latest["rsi"] < config.RSI_OVERBOUGHT
-        rsi_not_oversold = latest["rsi"] > config.RSI_OVERSOLD
+        spread_ok = self._spread_ok(latest)
+        atr_ok = self._atr_ok(latest)
 
-        # confidence = 3条件(トレンド/MACD/RSI)のうち満たされた数の割合(0/33/66/100)。
-        # 統計的な確率ではなく、ルールがどれだけ揃っているかを表すだけの指標。
-        buy_confidence = round(sum([uptrend, macd_bullish, rsi_not_overbought]) / 3 * 100)
-        sell_confidence = round(sum([downtrend, macd_bearish, rsi_not_oversold]) / 3 * 100)
+        buy_required = {
+            "上昇トレンド(EMA)": latest["ema_fast"] > latest["ema_slow"],
+            "終値がEMA以上": latest["close"] >= latest["ema_fast"],
+            "RSI帯域内(BUY)": config.RSI_BUY_MIN <= latest["rsi"] <= config.RSI_BUY_MAX,
+            "スプレッド許容内": spread_ok,
+            "ATR最低値以上": atr_ok,
+        }
+        sell_required = {
+            "下降トレンド(EMA)": latest["ema_fast"] < latest["ema_slow"],
+            "終値がEMA以下": latest["close"] <= latest["ema_fast"],
+            "RSI帯域内(SELL)": config.RSI_SELL_MIN <= latest["rsi"] <= config.RSI_SELL_MAX,
+            "スプレッド許容内": spread_ok,
+            "ATR最低値以上": atr_ok,
+        }
 
-        if uptrend and macd_bullish and rsi_not_overbought:
-            return Signal("BUY", "上昇トレンド + MACD陽転 + RSI過熱なし", details, buy_confidence)
+        if config.REQUIRE_NO_NEW_EXTREME_5BARS:
+            no_new_low, no_new_high = self._no_new_extreme_5bars(df)
+            buy_required["直近5本の安値を更新せず"] = no_new_low
+            sell_required["直近5本の高値を更新せず"] = no_new_high
 
-        if downtrend and macd_bearish and rsi_not_oversold:
-            return Signal("SELL", "下降トレンド + MACD陰転 + RSI売られすぎなし", details, sell_confidence)
+        buy_score, buy_bonus_reasons = self._bonus_score(df, "BUY")
+        sell_score, sell_bonus_reasons = self._bonus_score(df, "SELL")
 
-        return Signal(
-            "WAIT",
-            "トレンド・モメンタムの条件が揃っていません",
-            details,
-            max(buy_confidence, sell_confidence),
-        )
+        buy_ok = all(buy_required.values())
+        sell_ok = all(sell_required.values())
+        required_score = config.REQUIRED_SCORE
+
+        buy_confidence = round((sum(buy_required.values()) / len(buy_required)) * 50 + (buy_score / _BONUS_CONDITION_COUNT) * 50)
+        sell_confidence = round((sum(sell_required.values()) / len(sell_required)) * 50 + (sell_score / _BONUS_CONDITION_COUNT) * 50)
+
+        if buy_ok and buy_score >= required_score:
+            reason = f"必須条件を全て満たし、加点{buy_score}点({'/'.join(buy_bonus_reasons) or 'なし'})"
+            return Signal("BUY", reason, details, buy_confidence)
+
+        if sell_ok and sell_score >= required_score:
+            reason = f"必須条件を全て満たし、加点{sell_score}点({'/'.join(sell_bonus_reasons) or 'なし'})"
+            return Signal("SELL", reason, details, sell_confidence)
+
+        if buy_ok or sell_ok:
+            direction = "BUY" if buy_ok else "SELL"
+            score = buy_score if buy_ok else sell_score
+            reason = f"必須条件は満たすが加点不足({direction}: {score}/{required_score}点)"
+        else:
+            failed_buy = [k for k, v in buy_required.items() if not v]
+            failed_sell = [k for k, v in sell_required.items() if not v]
+            reason = f"必須条件が未達(BUY未達: {', '.join(failed_buy) or 'なし'} / SELL未達: {', '.join(failed_sell) or 'なし'})"
+
+        return Signal("WAIT", reason, details, max(buy_confidence, sell_confidence))
+
+    def _spread_ok(self, latest: pd.Series) -> bool:
+        if config.MAX_SPREAD_POINTS <= 0:
+            return True
+        if "spread" not in latest or pd.isna(latest["spread"]):
+            return True  # スプレッドデータが無い場合はチェックしない(古いEA等)
+        return float(latest["spread"]) <= config.MAX_SPREAD_POINTS
+
+    def _atr_ok(self, latest: pd.Series) -> bool:
+        if config.ATR_MIN_POINTS <= 0:
+            return True
+        if "atr" not in latest or pd.isna(latest["atr"]) or config.POINT_SIZE <= 0:
+            return True  # ATRが計算できない場合はチェックしない
+        atr_points = float(latest["atr"]) / config.POINT_SIZE
+        return atr_points >= config.ATR_MIN_POINTS
+
+    def _no_new_extreme_5bars(self, df: pd.DataFrame) -> tuple[bool, bool]:
+        """直近5本(最新を除く)の安値/高値を、最新足が更新していないか。
+
+        データが5本に満たない場合は判定不能として両方Falseを返す(必須条件を
+        満たさない=WAITへ倒す、安全側の扱い)。
+        """
+        if len(df) < 6:
+            return False, False
+        window = df.iloc[-6:-1]
+        latest = df.iloc[-1]
+        no_new_low = bool(latest["low"] >= window["low"].min())
+        no_new_high = bool(latest["high"] <= window["high"].max())
+        return no_new_low, no_new_high
+
+    def _bonus_score(self, df: pd.DataFrame, direction: str) -> tuple[int, list[str]]:
+        latest = df.iloc[-1]
+        is_buy = direction == "BUY"
+        score = 0
+        reasons: list[str] = []
+
+        if len(df) >= 2 and "macd_hist" in df.columns and not pd.isna(df.iloc[-2].get("macd_hist")):
+            prev = df.iloc[-2]
+            if (is_buy and latest["macd_hist"] > 0) or (not is_buy and latest["macd_hist"] < 0):
+                score += 1
+                reasons.append("MACDヒストグラムが方向一致")
+            if (is_buy and latest["macd_hist"] > prev["macd_hist"]) or (
+                not is_buy and latest["macd_hist"] < prev["macd_hist"]
+            ):
+                score += 1
+                reasons.append("MACDヒストグラムが拡大")
+
+            if (is_buy and latest["ema_fast"] > prev["ema_fast"]) or (
+                not is_buy and latest["ema_fast"] < prev["ema_fast"]
+            ):
+                score += 1
+                reasons.append("EMAの傾きが方向一致")
+        elif "macd_hist" in df.columns and not pd.isna(latest.get("macd_hist")):
+            if (is_buy and latest["macd_hist"] > 0) or (not is_buy and latest["macd_hist"] < 0):
+                score += 1
+                reasons.append("MACDヒストグラムが方向一致")
+
+        if "open" in latest and not pd.isna(latest["open"]):
+            if (is_buy and latest["close"] > latest["open"]) or (not is_buy and latest["close"] < latest["open"]):
+                score += 1
+                reasons.append("直近足の実体が方向一致")
+
+        if len(df) >= 3:
+            recent = df.iloc[-3:]
+            if is_buy and recent["low"].is_monotonic_increasing:
+                score += 1
+                reasons.append("直近3本の安値が切り上げ")
+            elif not is_buy and recent["high"].is_monotonic_decreasing:
+                score += 1
+                reasons.append("直近3本の高値が切り下げ")
+
+        return score, reasons
 
 
 class UnavailableAIEngine(AIEngine):

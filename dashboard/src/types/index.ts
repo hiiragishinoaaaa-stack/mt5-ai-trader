@@ -38,7 +38,10 @@ export interface MonthlyProfitPoint {
 
 export type Timeframe = "M1" | "M5" | "M15" | "M30" | "H1" | "H4" | "D1";
 
-export type EntryStrictness = "conservative" | "balanced" | "aggressive";
+export type EntryStrictness = "conservative" | "balanced" | "aggressive" | "active_m5";
+
+// SL/TPの決め方。fixed=SL_POINTS/TP_POINTS固定、atr=ATR(14)×倍率で毎回動的に計算。
+export type StopMode = "fixed" | "atr";
 
 // rule_based(ヒューリスティック) / openai / claude(いずれもLLM API連携、
 // 実際に利用ごとに料金が発生する)。APIキー自体はセキュリティ上の理由で
@@ -71,6 +74,30 @@ export interface TradingSettings {
   BOT_RUN_STATE: BotRunState;
   AI_ENGINE: AiEngineChoice;
   ENABLED_SYMBOLS: AvailableSymbol[];
+  // --- スコアリング方式のエントリー条件(RuleBasedAIEngine) ---
+  RSI_PERIOD: number;
+  ATR_PERIOD: number;
+  RSI_BUY_MIN: number;
+  RSI_BUY_MAX: number;
+  RSI_SELL_MIN: number;
+  RSI_SELL_MAX: number;
+  REQUIRED_SCORE: number;
+  REQUIRE_NO_NEW_EXTREME_5BARS: boolean;
+  MAX_SPREAD_POINTS: number;
+  ATR_MIN_POINTS: number;
+  POINT_SIZE: number;
+  // --- SL/TP方式 ---
+  STOP_MODE: StopMode;
+  ATR_SL_MULTIPLIER: number;
+  ATR_TP_MULTIPLIER: number;
+  BROKER_MIN_STOP_POINTS: number;
+  // --- エントリー頻度・サーキットブレーカー ---
+  ENTRY_COOLDOWN_SECONDS: number;
+  MAX_TRADES_PER_HOUR: number;
+  MAX_TRADES_PER_DAY: number;
+  MAX_DAILY_LOSS_PERCENT: number;
+  LOSS_STREAK_THRESHOLD: number;
+  COOLDOWN_AFTER_LOSSES_MINUTES: number;
 }
 
 // --- 実際にPython側(account_feed.py経由でEAが書き出すJSON)から取得する

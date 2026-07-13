@@ -69,12 +69,16 @@ import logging
 import sys
 import time
 
+import pandas as pd
+
 import ai_status
 import close_notifier
 import config
 import daily_summary
 import ea_config_writer
 import indicators
+import risk_manager
+from account_feed import FileAccountFeed
 from ai_engine import Signal, get_ai_engine
 from logger import setup_logger
 from market_feed import FileMarketFeed, MarketFeedError
@@ -138,8 +142,11 @@ def _run_symbol_cycle(
     symbol: str,
     force_signal: str,
     request_id: str | None,
+    history_feed: FileTradeHistoryFeed,
+    account_feed: FileAccountFeed,
 ) -> Signal | None:
-    """1銘柄分のデータ取得 → 指標計算 → AI判断 → (必要なら発注) を行う。
+    """1銘柄分のデータ取得 → 指標計算 → AI判断 → (必要ならrisk_managerで
+    許可を確認した上で発注) を行う。
 
     複数銘柄対応(Phase 12)により、run_once()がconfig.ENABLED_SYMBOLSの
     銘柄それぞれについてこの関数を呼び出す。データ取得や判断、発注の
@@ -151,6 +158,22 @@ def _run_symbol_cycle(
         enriched = indicators.add_indicators(snapshot.candles)
         signal = ai_engine.decide(enriched)
         signal = apply_force_signal(signal, force_signal)
+
+        atr_price: float | None = None
+        if "atr" in enriched.columns:
+            latest_atr = enriched.iloc[-1]["atr"]
+            if not pd.isna(latest_atr):
+                atr_price = float(latest_atr)
+
+        if signal.action in ("BUY", "SELL"):
+            risk_check = risk_manager.check_entry_allowed(symbol, history_feed, account_feed)
+            if not risk_check.allowed:
+                signal = Signal(
+                    "WAIT",
+                    f"エントリー条件は成立したが見送り: {risk_check.reason}(元の判断: {signal.action} / {signal.reason})",
+                    signal.details,
+                    signal.confidence,
+                )
 
         message = (
             f"[{symbol}] bid={snapshot.tick.bid} ask={snapshot.tick.ask} "
@@ -165,7 +188,7 @@ def _run_symbol_cycle(
         except OSError:
             logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
 
-        order_executor.submit_if_needed(signal, symbol, request_id=request_id)
+        order_executor.submit_if_needed(signal, symbol, atr_price=atr_price, request_id=request_id)
 
         return signal
     except MarketFeedError as exc:
@@ -183,6 +206,7 @@ def run_once(
     force_signal: str = "",
     request_id: str | None = None,
     trade_history_feed: FileTradeHistoryFeed | None = None,
+    account_feed: FileAccountFeed | None = None,
 ) -> Signal | None:
     """1回分のサイクルを実行する(config.ENABLED_SYMBOLSの銘柄それぞれについて
     データ取得 → 指標計算 → AI判断 → (必要なら発注) → ログ出力を行う)。
@@ -227,6 +251,7 @@ def run_once(
             )
 
     history_feed = trade_history_feed or FileTradeHistoryFeed()
+    acct_feed = account_feed or FileAccountFeed()
 
     try:
         daily_summary.maybe_send_daily_summary(history_feed)
@@ -255,7 +280,9 @@ def run_once(
 
     primary_signal: Signal | None = None
     for symbol in config.ENABLED_SYMBOLS:
-        signal = _run_symbol_cycle(feed, ai_engine, order_executor, symbol, force_signal, request_id)
+        signal = _run_symbol_cycle(
+            feed, ai_engine, order_executor, symbol, force_signal, request_id, history_feed, acct_feed
+        )
         if symbol == config.SYMBOL:
             primary_signal = signal
     return primary_signal

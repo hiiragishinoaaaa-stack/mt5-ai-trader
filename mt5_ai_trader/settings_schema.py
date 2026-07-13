@@ -33,13 +33,67 @@ AI_ENGINE_CHOICES = ("rule_based", "openai", "claude")
 # (プロセス自体は動き続ける。詳細はmain.py run_once()を参照)。
 BOT_RUN_STATE_CHOICES = ("RUNNING", "STOPPED", "EMERGENCY_STOPPED")
 
-# Entry Strictness(エントリーの厳しさ)プリセット。選択するとRSI_OVERBOUGHT/
-# RSI_OVERSOLDがこの値に上書きされる(payloadにRSI値も明示的に含まれていた
-# 場合はそちらを優先する。validate()を参照)。
-ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, float]] = {
-    "conservative": {"RSI_OVERBOUGHT": 65.0, "RSI_OVERSOLD": 35.0},
-    "balanced": {"RSI_OVERBOUGHT": 70.0, "RSI_OVERSOLD": 30.0},
-    "aggressive": {"RSI_OVERBOUGHT": 80.0, "RSI_OVERSOLD": 20.0},
+# Entry Strictness(エントリーの厳しさ)プリセット。選択すると、ここに列挙
+# された各キーがconfig.jsonへ上書きされる(payloadに同じキーが明示的に
+# 含まれていた場合はそちらを優先する。validate()を参照)。
+#
+# RuleBasedAIEngine(ai_engine.py)は「必須条件」(全て満たす必要がある)と
+# 「加点条件」(REQUIRED_SCORE点以上でエントリー候補)の2段階でBUY/SELLを
+# 判断する。RSI_BUY_MIN/MAX・RSI_SELL_MIN/MAX・REQUIRED_SCOREがこの判断の
+# 主要パラメータで、プリセットが厳しくなるほどRSI帯域が狭く・必要スコアが
+# 高くなる。conservativeのみ、直近5本の安値/高値を更新していないことを
+# 追加の必須条件にする(REQUIRE_NO_NEW_EXTREME_5BARS)。
+#
+# active_m5は上記に加えてTIMEFRAME/EMA期間/ATRベースSL・TP/エントリー
+# クールダウン/時間・日あたりの最大取引数もまとめて切り替える、USDJPY・M5
+# での積極運用を想定したプリセット(詳細はREADME.mdの「複数銘柄対応」の後、
+# 「M5アクティブ運用」セクションを参照)。
+ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
+    "conservative": {
+        "RSI_BUY_MIN": 52.0,
+        "RSI_BUY_MAX": 62.0,
+        "RSI_SELL_MIN": 38.0,
+        "RSI_SELL_MAX": 48.0,
+        "REQUIRED_SCORE": 4,
+        "REQUIRE_NO_NEW_EXTREME_5BARS": True,
+    },
+    "balanced": {
+        "RSI_BUY_MIN": 50.0,
+        "RSI_BUY_MAX": 65.0,
+        "RSI_SELL_MIN": 35.0,
+        "RSI_SELL_MAX": 50.0,
+        "REQUIRED_SCORE": 3,
+        "REQUIRE_NO_NEW_EXTREME_5BARS": False,
+    },
+    "aggressive": {
+        "RSI_BUY_MIN": 45.0,
+        "RSI_BUY_MAX": 75.0,
+        "RSI_SELL_MIN": 25.0,
+        "RSI_SELL_MAX": 55.0,
+        "REQUIRED_SCORE": 1,
+        "REQUIRE_NO_NEW_EXTREME_5BARS": False,
+    },
+    "active_m5": {
+        "RSI_BUY_MIN": 48.0,
+        "RSI_BUY_MAX": 68.0,
+        "RSI_SELL_MIN": 32.0,
+        "RSI_SELL_MAX": 52.0,
+        "REQUIRED_SCORE": 2,
+        "REQUIRE_NO_NEW_EXTREME_5BARS": False,
+        "TIMEFRAME": "M5",
+        "EMA_FAST_PERIOD": 20,
+        "EMA_SLOW_PERIOD": 50,
+        "RSI_PERIOD": 14,
+        "ATR_PERIOD": 14,
+        "LOOP_INTERVAL_SECONDS": 30,
+        "ENTRY_COOLDOWN_SECONDS": 600,
+        "MAX_CONCURRENT_POSITIONS": 1,
+        "MAX_TRADES_PER_HOUR": 2,
+        "MAX_TRADES_PER_DAY": 12,
+        "STOP_MODE": "atr",
+        "ATR_SL_MULTIPLIER": 1.2,
+        "ATR_TP_MULTIPLIER": 1.8,
+    },
 }
 
 
@@ -64,6 +118,27 @@ FIELDS: dict[str, FieldSpec] = {
     "RSI_OVERSOLD": FieldSpec("RSI_OVERSOLD", float, min_value=0.0, max_value=50.0),
     "EMA_FAST_PERIOD": FieldSpec("EMA_FAST_PERIOD", int, min_value=1, max_value=500),
     "EMA_SLOW_PERIOD": FieldSpec("EMA_SLOW_PERIOD", int, min_value=2, max_value=1000),
+    "RSI_PERIOD": FieldSpec("RSI_PERIOD", int, min_value=2, max_value=200),
+    "ATR_PERIOD": FieldSpec("ATR_PERIOD", int, min_value=2, max_value=200),
+    "RSI_BUY_MIN": FieldSpec("RSI_BUY_MIN", float, min_value=0.0, max_value=100.0),
+    "RSI_BUY_MAX": FieldSpec("RSI_BUY_MAX", float, min_value=0.0, max_value=100.0),
+    "RSI_SELL_MIN": FieldSpec("RSI_SELL_MIN", float, min_value=0.0, max_value=100.0),
+    "RSI_SELL_MAX": FieldSpec("RSI_SELL_MAX", float, min_value=0.0, max_value=100.0),
+    "REQUIRED_SCORE": FieldSpec("REQUIRED_SCORE", int, min_value=0, max_value=5),
+    "REQUIRE_NO_NEW_EXTREME_5BARS": FieldSpec("REQUIRE_NO_NEW_EXTREME_5BARS", bool),
+    "POINT_SIZE": FieldSpec("POINT_SIZE", float, min_value=0.000001, max_value=10.0),
+    "MAX_SPREAD_POINTS": FieldSpec("MAX_SPREAD_POINTS", float, min_value=0.0, max_value=100_000.0),
+    "ATR_MIN_POINTS": FieldSpec("ATR_MIN_POINTS", float, min_value=0.0, max_value=100_000.0),
+    "STOP_MODE": FieldSpec("STOP_MODE", str, choices=("fixed", "atr")),
+    "ATR_SL_MULTIPLIER": FieldSpec("ATR_SL_MULTIPLIER", float, min_value=0.1, max_value=20.0),
+    "ATR_TP_MULTIPLIER": FieldSpec("ATR_TP_MULTIPLIER", float, min_value=0.1, max_value=20.0),
+    "BROKER_MIN_STOP_POINTS": FieldSpec("BROKER_MIN_STOP_POINTS", int, min_value=0, max_value=100_000),
+    "ENTRY_COOLDOWN_SECONDS": FieldSpec("ENTRY_COOLDOWN_SECONDS", int, min_value=0, max_value=86_400),
+    "MAX_TRADES_PER_HOUR": FieldSpec("MAX_TRADES_PER_HOUR", int, min_value=0, max_value=1000),
+    "MAX_TRADES_PER_DAY": FieldSpec("MAX_TRADES_PER_DAY", int, min_value=0, max_value=10_000),
+    "MAX_DAILY_LOSS_PERCENT": FieldSpec("MAX_DAILY_LOSS_PERCENT", float, min_value=0.0, max_value=100.0),
+    "LOSS_STREAK_THRESHOLD": FieldSpec("LOSS_STREAK_THRESHOLD", int, min_value=1, max_value=20),
+    "COOLDOWN_AFTER_LOSSES_MINUTES": FieldSpec("COOLDOWN_AFTER_LOSSES_MINUTES", int, min_value=0, max_value=1440),
     "ENTRY_STRICTNESS": FieldSpec("ENTRY_STRICTNESS", str, choices=tuple(ENTRY_STRICTNESS_PRESETS)),
     "ENABLE_ORDERS": FieldSpec("ENABLE_ORDERS", bool),
     "DEMO_ONLY": FieldSpec("DEMO_ONLY", bool),
@@ -146,12 +221,13 @@ def validate(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
 
         cleaned[key] = value
 
-    # Entry Strictnessのプリセットが指定され、RSI値が明示的には送られて
-    # こなかった場合、プリセットに対応するRSI値を補う。
+    # Entry Strictnessのプリセットが指定され、対応するキーが明示的には
+    # 送られてこなかった場合、プリセットの値で補う(payloadに同じキーが
+    # 明示的に含まれていればそちらを優先。setdefault()のため)。
     if "ENTRY_STRICTNESS" in cleaned:
         preset = ENTRY_STRICTNESS_PRESETS[cleaned["ENTRY_STRICTNESS"]]
-        cleaned.setdefault("RSI_OVERBOUGHT", preset["RSI_OVERBOUGHT"])
-        cleaned.setdefault("RSI_OVERSOLD", preset["RSI_OVERSOLD"])
+        for key, value in preset.items():
+            cleaned.setdefault(key, value)
 
     # RSI/EMAの相互関係チェック。cleanedに無い側は現在の実効値(config.py)を使う。
     if "RSI_OVERBOUGHT" in cleaned or "RSI_OVERSOLD" in cleaned:
@@ -161,6 +237,22 @@ def validate(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
             errors["RSI_OVERBOUGHT"] = "RSI_OVERBOUGHTはRSI_OVERSOLDより大きい値にしてください"
             cleaned.pop("RSI_OVERBOUGHT", None)
             cleaned.pop("RSI_OVERSOLD", None)
+
+    if "RSI_BUY_MIN" in cleaned or "RSI_BUY_MAX" in cleaned:
+        buy_min = cleaned.get("RSI_BUY_MIN", config.RSI_BUY_MIN)
+        buy_max = cleaned.get("RSI_BUY_MAX", config.RSI_BUY_MAX)
+        if buy_min >= buy_max:
+            errors["RSI_BUY_MIN"] = "RSI_BUY_MINはRSI_BUY_MAXより小さい値にしてください"
+            cleaned.pop("RSI_BUY_MIN", None)
+            cleaned.pop("RSI_BUY_MAX", None)
+
+    if "RSI_SELL_MIN" in cleaned or "RSI_SELL_MAX" in cleaned:
+        sell_min = cleaned.get("RSI_SELL_MIN", config.RSI_SELL_MIN)
+        sell_max = cleaned.get("RSI_SELL_MAX", config.RSI_SELL_MAX)
+        if sell_min >= sell_max:
+            errors["RSI_SELL_MIN"] = "RSI_SELL_MINはRSI_SELL_MAXより小さい値にしてください"
+            cleaned.pop("RSI_SELL_MIN", None)
+            cleaned.pop("RSI_SELL_MAX", None)
 
     if "EMA_FAST_PERIOD" in cleaned or "EMA_SLOW_PERIOD" in cleaned:
         fast = cleaned.get("EMA_FAST_PERIOD", config.EMA_FAST_PERIOD)

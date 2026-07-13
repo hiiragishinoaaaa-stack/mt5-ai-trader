@@ -6,6 +6,7 @@ import {
   AI_ENGINE_LABELS,
   AVAILABLE_SYMBOLS,
   ENTRY_STRICTNESS_PRESETS,
+  STOP_MODE_OPTIONS,
   TIMEFRAME_OPTIONS,
   validateTradingSettingsDraft,
   type ValidationErrors,
@@ -64,11 +65,11 @@ export function TradingSettings() {
   }
 
   function applyEntryStrictness(level: keyof typeof ENTRY_STRICTNESS_PRESETS) {
-    const preset = ENTRY_STRICTNESS_PRESETS[level];
+    const { label: _label, description: _description, extra, ...rest } = ENTRY_STRICTNESS_PRESETS[level];
     updateDraft({
       ENTRY_STRICTNESS: level,
-      RSI_OVERBOUGHT: preset.RSI_OVERBOUGHT,
-      RSI_OVERSOLD: preset.RSI_OVERSOLD,
+      ...rest,
+      ...(extra ?? {}),
     });
   }
 
@@ -181,27 +182,49 @@ export function TradingSettings() {
           />
           <span className="text-xs text-ink-faint">
             {ENTRY_STRICTNESS_PRESETS[draft.ENTRY_STRICTNESS].description}
-            (選択すると下のRSI値も自動更新されます。その後個別に調整できます)
+            (選択すると下の必須条件・必要スコアも自動更新されます。その後個別に調整できます)
           </span>
         </div>
         <div className="grid grid-cols-2 gap-x-3">
           <NumberField
-            label="RSI Overbought"
+            label="RSI BUY Min"
             step={1}
-            value={draft.RSI_OVERBOUGHT}
-            onChange={(v) => updateDraft({ RSI_OVERBOUGHT: v })}
-            error={errors.RSI_OVERBOUGHT}
+            value={draft.RSI_BUY_MIN}
+            onChange={(v) => updateDraft({ RSI_BUY_MIN: v })}
+            error={errors.RSI_BUY_MIN}
             disabled={saving}
           />
           <NumberField
-            label="RSI Oversold"
+            label="RSI BUY Max"
             step={1}
-            value={draft.RSI_OVERSOLD}
-            onChange={(v) => updateDraft({ RSI_OVERSOLD: v })}
-            error={errors.RSI_OVERSOLD}
+            value={draft.RSI_BUY_MAX}
+            onChange={(v) => updateDraft({ RSI_BUY_MAX: v })}
+            error={errors.RSI_BUY_MAX}
             disabled={saving}
           />
         </div>
+        <div className="grid grid-cols-2 gap-x-3">
+          <NumberField
+            label="RSI SELL Min"
+            step={1}
+            value={draft.RSI_SELL_MIN}
+            onChange={(v) => updateDraft({ RSI_SELL_MIN: v })}
+            error={errors.RSI_SELL_MIN}
+            disabled={saving}
+          />
+          <NumberField
+            label="RSI SELL Max"
+            step={1}
+            value={draft.RSI_SELL_MAX}
+            onChange={(v) => updateDraft({ RSI_SELL_MAX: v })}
+            error={errors.RSI_SELL_MAX}
+            disabled={saving}
+          />
+        </div>
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          BUY/SELLそれぞれの必須条件として、RSIがこの範囲内にあることを要求する(EMAトレンド・スプレッド・ATR等の
+          他の必須条件と合わせて全て満たす必要がある)。
+        </span>
         <div className="grid grid-cols-2 gap-x-3">
           <NumberField
             label="EMA Fast"
@@ -220,6 +243,63 @@ export function TradingSettings() {
             disabled={saving}
           />
         </div>
+        <div className="grid grid-cols-2 gap-x-3">
+          <NumberField
+            label="RSI Period"
+            step={1}
+            value={draft.RSI_PERIOD}
+            onChange={(v) => updateDraft({ RSI_PERIOD: v })}
+            error={errors.RSI_PERIOD}
+            disabled={saving}
+          />
+          <NumberField
+            label="ATR Period"
+            step={1}
+            value={draft.ATR_PERIOD}
+            onChange={(v) => updateDraft({ ATR_PERIOD: v })}
+            error={errors.ATR_PERIOD}
+            disabled={saving}
+          />
+        </div>
+        <NumberField
+          label="Required Score"
+          step={1}
+          suffix="/5点"
+          value={draft.REQUIRED_SCORE}
+          onChange={(v) => updateDraft({ REQUIRED_SCORE: v })}
+          error={errors.REQUIRED_SCORE}
+          disabled={saving}
+        />
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          必須条件を全て満たした上で、MACD方向・EMA傾き等の加点条件(最大5点)がこの点数以上ならエントリー候補になる。
+          {draft.REQUIRE_NO_NEW_EXTREME_5BARS
+            ? " 現在のプリセットでは、直近5本の安値/高値を更新していないことも必須条件に追加されている。"
+            : ""}
+        </span>
+        <div className="grid grid-cols-2 gap-x-3">
+          <NumberField
+            label="Max Spread"
+            step={1}
+            suffix="points"
+            value={draft.MAX_SPREAD_POINTS}
+            onChange={(v) => updateDraft({ MAX_SPREAD_POINTS: v })}
+            error={errors.MAX_SPREAD_POINTS}
+            disabled={saving}
+          />
+          <NumberField
+            label="ATR Min"
+            step={1}
+            suffix="points"
+            value={draft.ATR_MIN_POINTS}
+            onChange={(v) => updateDraft({ ATR_MIN_POINTS: v })}
+            error={errors.ATR_MIN_POINTS}
+            disabled={saving}
+          />
+        </div>
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          スプレッドがMax Spreadを超える、またはATR(値動きの大きさ)がATR
+          Min未満の場合はエントリーしない(いずれも0でチェック無効)。
+        </span>
         <PillGroup
           label="Timeframe"
           value={draft.TIMEFRAME}
@@ -286,6 +366,19 @@ export function TradingSettings() {
           error={errors.ORDER_VOLUME}
           disabled={saving}
         />
+        <PillGroup
+          label="Stop Mode"
+          value={draft.STOP_MODE}
+          onChange={(v) => updateDraft({ STOP_MODE: v })}
+          disabled={saving}
+          options={STOP_MODE_OPTIONS.map((mode) => ({
+            value: mode,
+            label: mode === "fixed" ? "Fixed" : "ATR",
+          }))}
+        />
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          Fixed: 下のSL/TP(points)を毎回そのまま使う。ATR: 発注のたびにATR(値動きの大きさ)×倍率でSL/TPを動的に計算する。
+        </span>
         <div className="grid grid-cols-2 gap-x-3">
           <NumberField
             label="SL"
@@ -306,6 +399,51 @@ export function TradingSettings() {
             disabled={saving}
           />
         </div>
+        {draft.STOP_MODE === "atr" ? (
+          <>
+            <div className="grid grid-cols-2 gap-x-3">
+              <NumberField
+                label="ATR SL倍率"
+                step={0.1}
+                value={draft.ATR_SL_MULTIPLIER}
+                onChange={(v) => updateDraft({ ATR_SL_MULTIPLIER: v })}
+                error={errors.ATR_SL_MULTIPLIER}
+                disabled={saving}
+              />
+              <NumberField
+                label="ATR TP倍率"
+                step={0.1}
+                value={draft.ATR_TP_MULTIPLIER}
+                onChange={(v) => updateDraft({ ATR_TP_MULTIPLIER: v })}
+                error={errors.ATR_TP_MULTIPLIER}
+                disabled={saving}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-x-3">
+              <NumberField
+                label="Point Size"
+                step={0.0001}
+                value={draft.POINT_SIZE}
+                onChange={(v) => updateDraft({ POINT_SIZE: v })}
+                error={errors.POINT_SIZE}
+                disabled={saving}
+              />
+              <NumberField
+                label="Broker Min Stop"
+                step={1}
+                suffix="points"
+                value={draft.BROKER_MIN_STOP_POINTS}
+                onChange={(v) => updateDraft({ BROKER_MIN_STOP_POINTS: v })}
+                error={errors.BROKER_MIN_STOP_POINTS}
+                disabled={saving}
+              />
+            </div>
+            <span className="-mt-1 pb-2 text-xs text-ink-faint">
+              Point SizeはブローカーのUSDJPY 1point単位の価格(例: 3桁ブローカーなら0.001)。実際の値と合っていないと
+              SL/TP幅がずれるので必ず確認すること。
+            </span>
+          </>
+        ) : null}
         <NumberField
           label="Max Concurrent Positions"
           step={1}
@@ -317,6 +455,75 @@ export function TradingSettings() {
         />
         <span className="-mt-1 pb-2 text-xs text-ink-faint">
           同じ銘柄で同時に保有できるポジション数の上限(1〜10)。実際のカウント・強制はEA側(v4.01以降)が行う。
+        </span>
+      </Card>
+
+      <Card className="flex flex-col gap-1">
+        <span className="mb-1 text-sm font-semibold text-ink">リスク管理</span>
+        <span className="-mt-0.5 pb-1 text-xs text-ink-faint">
+          エントリー頻度の制御・サーキットブレーカー。AIがBUY/SELLと判断しても、ここでブロックされる場合は
+          自動的にWAITへ差し替えられる(Trade画面のAI Judgementに理由が表示される)。
+        </span>
+        <NumberField
+          label="Entry Cooldown"
+          step={30}
+          suffix="秒"
+          value={draft.ENTRY_COOLDOWN_SECONDS}
+          onChange={(v) => updateDraft({ ENTRY_COOLDOWN_SECONDS: v })}
+          error={errors.ENTRY_COOLDOWN_SECONDS}
+          disabled={saving}
+        />
+        <div className="grid grid-cols-2 gap-x-3">
+          <NumberField
+            label="Max Trades/Hour"
+            step={1}
+            value={draft.MAX_TRADES_PER_HOUR}
+            onChange={(v) => updateDraft({ MAX_TRADES_PER_HOUR: v })}
+            error={errors.MAX_TRADES_PER_HOUR}
+            disabled={saving}
+          />
+          <NumberField
+            label="Max Trades/Day"
+            step={1}
+            value={draft.MAX_TRADES_PER_DAY}
+            onChange={(v) => updateDraft({ MAX_TRADES_PER_DAY: v })}
+            error={errors.MAX_TRADES_PER_DAY}
+            disabled={saving}
+          />
+        </div>
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          いずれも0でチェック無効。直近1時間/24時間に新規オープンした回数(手動決済・自動決済を問わない)で判定する。
+        </span>
+        <div className="grid grid-cols-2 gap-x-3">
+          <NumberField
+            label="連敗数"
+            step={1}
+            value={draft.LOSS_STREAK_THRESHOLD}
+            onChange={(v) => updateDraft({ LOSS_STREAK_THRESHOLD: v })}
+            error={errors.LOSS_STREAK_THRESHOLD}
+            disabled={saving}
+          />
+          <NumberField
+            label="連敗後の停止時間"
+            step={5}
+            suffix="分"
+            value={draft.COOLDOWN_AFTER_LOSSES_MINUTES}
+            onChange={(v) => updateDraft({ COOLDOWN_AFTER_LOSSES_MINUTES: v })}
+            error={errors.COOLDOWN_AFTER_LOSSES_MINUTES}
+            disabled={saving}
+          />
+        </div>
+        <NumberField
+          label="1日の最大損失"
+          step={1}
+          suffix="%"
+          value={draft.MAX_DAILY_LOSS_PERCENT}
+          onChange={(v) => updateDraft({ MAX_DAILY_LOSS_PERCENT: v })}
+          error={errors.MAX_DAILY_LOSS_PERCENT}
+          disabled={saving}
+        />
+        <span className="-mt-1 pb-2 text-xs text-ink-faint">
+          連敗後の停止時間・1日の最大損失は0で無効。決済方法(手動/自動)は区別せず、損益の実績だけで判定する。
         </span>
       </Card>
 

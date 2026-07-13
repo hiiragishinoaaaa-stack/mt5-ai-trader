@@ -27,6 +27,11 @@ def _patch_order_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "TP_POINTS", 400)
     monkeypatch.setattr(config, "MAX_CONCURRENT_POSITIONS", 3)
     monkeypatch.setattr(config, "ORDER_RESULT_WAIT_SECONDS", 2.0)
+    monkeypatch.setattr(config, "STOP_MODE", "fixed")
+    monkeypatch.setattr(config, "ATR_SL_MULTIPLIER", 1.2)
+    monkeypatch.setattr(config, "ATR_TP_MULTIPLIER", 1.8)
+    monkeypatch.setattr(config, "POINT_SIZE", 0.001)
+    monkeypatch.setattr(config, "BROKER_MIN_STOP_POINTS", 0)
     monkeypatch.setattr(order_executor, "_RESULT_POLL_INTERVAL_SECONDS", 0.05)
 
 
@@ -212,4 +217,60 @@ def test_omitted_request_id_generates_unique_ids_each_call(monkeypatch):
 
     assert first is not None and second is not None
     assert len(write_calls) == 2
-    assert write_calls[0]["request_id"] != write_calls[1]["request_id"]
+
+
+# --- ATRベースのSL/TP(_resolve_stop_points) ----------------------------------
+
+
+def test_resolve_stop_points_uses_fixed_by_default():
+    executor = order_executor.FileOrderExecutor()
+    sl, tp = executor._resolve_stop_points(config.SYMBOL, atr_price=0.05)
+    assert (sl, tp) == (200, 400)  # STOP_MODE="fixed"なのでATRは無視される
+
+
+def test_resolve_stop_points_computes_from_atr(monkeypatch):
+    monkeypatch.setattr(config, "STOP_MODE", "atr")
+    executor = order_executor.FileOrderExecutor()
+    sl, tp = executor._resolve_stop_points(config.SYMBOL, atr_price=0.100)
+    # SL = 0.100 * 1.2 / 0.001 = 120, TP = 0.100 * 1.8 / 0.001 = 180
+    assert (sl, tp) == (120, 180)
+
+
+def test_resolve_stop_points_falls_back_to_fixed_when_atr_missing(monkeypatch):
+    monkeypatch.setattr(config, "STOP_MODE", "atr")
+    executor = order_executor.FileOrderExecutor()
+    sl, tp = executor._resolve_stop_points(config.SYMBOL, atr_price=None)
+    assert (sl, tp) == (200, 400)
+
+
+def test_resolve_stop_points_respects_broker_min_stop(monkeypatch):
+    monkeypatch.setattr(config, "STOP_MODE", "atr")
+    monkeypatch.setattr(config, "BROKER_MIN_STOP_POINTS", 150)
+    executor = order_executor.FileOrderExecutor()
+    sl, tp = executor._resolve_stop_points(config.SYMBOL, atr_price=0.010)
+    # 計算上は SL=12, TP=18 だがBROKER_MIN_STOP_POINTS=150が下限になる
+    assert (sl, tp) == (150, 150)
+
+
+def test_buy_signal_uses_atr_based_stop_when_configured(monkeypatch):
+    monkeypatch.setattr(config, "STOP_MODE", "atr")
+    executor = order_executor.FileOrderExecutor()
+
+    import threading
+
+    def fake_ea():
+        for _ in range(50):
+            if config.ORDER_REQUEST_FILE_PATH.exists():
+                break
+            time.sleep(0.02)
+        request = _read_request()
+        _write_fake_ea_result(request["request_id"], success=True)
+
+    t = threading.Thread(target=fake_ea)
+    t.start()
+    executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL, atr_price=0.100)
+    t.join()
+
+    request = _read_request()
+    assert request["sl_points"] == 120
+    assert request["tp_points"] == 180

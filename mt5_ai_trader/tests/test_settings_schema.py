@@ -206,8 +206,28 @@ def test_entry_strictness_populates_rsi_thresholds_when_not_explicit():
     assert errors == {}
     assert cleaned["ENTRY_STRICTNESS"] == "aggressive"
     preset = settings_schema.ENTRY_STRICTNESS_PRESETS["aggressive"]
-    assert cleaned["RSI_OVERBOUGHT"] == preset["RSI_OVERBOUGHT"]
-    assert cleaned["RSI_OVERSOLD"] == preset["RSI_OVERSOLD"]
+    assert cleaned["RSI_BUY_MIN"] == preset["RSI_BUY_MIN"]
+    assert cleaned["RSI_BUY_MAX"] == preset["RSI_BUY_MAX"]
+    assert cleaned["RSI_SELL_MIN"] == preset["RSI_SELL_MIN"]
+    assert cleaned["RSI_SELL_MAX"] == preset["RSI_SELL_MAX"]
+    assert cleaned["REQUIRED_SCORE"] == preset["REQUIRED_SCORE"]
+
+
+def test_entry_strictness_active_m5_cascades_timeframe_and_atr_settings():
+    cleaned, errors = settings_schema.validate({"ENTRY_STRICTNESS": "active_m5"})
+
+    assert errors == {}
+    preset = settings_schema.ENTRY_STRICTNESS_PRESETS["active_m5"]
+    for key, value in preset.items():
+        assert cleaned[key] == value
+
+
+def test_rsi_buy_min_must_be_less_than_max():
+    cleaned, errors = settings_schema.validate({"RSI_BUY_MIN": 70.0, "RSI_BUY_MAX": 60.0})
+
+    assert "RSI_BUY_MIN" in errors
+    assert "RSI_BUY_MIN" not in cleaned
+    assert "RSI_BUY_MAX" not in cleaned
 
 
 def test_entry_strictness_does_not_override_explicit_rsi_values():

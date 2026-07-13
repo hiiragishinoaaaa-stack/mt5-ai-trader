@@ -68,7 +68,11 @@ class FileOrderExecutor:
         self._submitted_request_ids: set[str] = set()
 
     def submit_if_needed(
-        self, signal: Signal, symbol: str, request_id: str | None = None
+        self,
+        signal: Signal,
+        symbol: str,
+        atr_price: float | None = None,
+        request_id: str | None = None,
     ) -> OrderResult | None:
         """signalがBUY/SELLの場合のみ発注リクエストを送出する。
 
@@ -80,6 +84,11 @@ class FileOrderExecutor:
         明示的に渡される。config.ENABLED_SYMBOLSに含まれる銘柄ごとに
         別々のリクエスト/結果ファイル(config.order_request_file_path()等)
         を使うため、この引数で対象銘柄を特定する。
+
+        atr_priceは直近ローソク足のATR(価格単位)。config.STOP_MODE=="atr"
+        の場合、これを使ってSL/TPを動的に計算する(_resolve_stop_points()
+        参照)。省略・None・STOP_MODE=="fixed"の場合は従来通りconfig.
+        SL_POINTS/TP_POINTSを使う。
 
         request_idを明示的に渡した場合(発注テスト用モード)、同じIDで
         既に送出済みであれば新たなリクエストは書き出さずスキップする。
@@ -126,14 +135,16 @@ class FileOrderExecutor:
             return None
         self._submitted_request_ids.add(resolved_request_id)
 
+        sl_points, tp_points = self._resolve_stop_points(symbol, atr_price)
+
         request = {
             "request_id": resolved_request_id,
             "created_at": time.time(),
             "action": signal.action,
             "symbol": symbol,
             "volume": config.ORDER_VOLUME,
-            "sl_points": config.SL_POINTS,
-            "tp_points": config.TP_POINTS,
+            "sl_points": sl_points,
+            "tp_points": tp_points,
             "max_positions": config.MAX_CONCURRENT_POSITIONS,
             "demo_only": True,
         }
@@ -147,8 +158,8 @@ class FileOrderExecutor:
             signal.action,
             symbol,
             config.ORDER_VOLUME,
-            config.SL_POINTS,
-            config.TP_POINTS,
+            sl_points,
+            tp_points,
         )
 
         result = self._wait_for_result(resolved_request_id, symbol)
@@ -186,6 +197,38 @@ class FileOrderExecutor:
             )
             discord_notifier.notify_order_failed(signal.action, symbol, result.message)
         return result
+
+    def _resolve_stop_points(self, symbol: str, atr_price: float | None) -> tuple[int, int]:
+        """SL/TP(points)を決定する。
+
+        config.STOP_MODE=="atr"かつATR値・POINT_SIZEが揃っている場合のみ、
+        ATR(価格単位)×倍率をPOINT_SIZEでpoints換算して動的に計算する。それ
+        以外(fixed・ATR未計算・POINT_SIZE未設定)は従来通りconfig.SL_POINTS/
+        TP_POINTSを返す(後方互換)。
+
+        POINT_SIZEはブローカーの実際の1point単位の価格(例:
+        USDJPYで3桁ブローカーなら0.001)と必ず一致させること。ここが
+        ずれていると、意図したpips幅と違うSL/TPになる。BROKER_MIN_STOP_
+        POINTSを設定した場合、計算結果がそれを下回らないよう補正する
+        (ブローカーの最小ストップ距離の簡易的な近似。EA側で実際の
+        SYMBOL_TRADE_STOPS_LEVELを検証しているわけではない)。
+        """
+        if config.STOP_MODE != "atr" or atr_price is None or atr_price <= 0 or config.POINT_SIZE <= 0:
+            return config.SL_POINTS, config.TP_POINTS
+
+        sl_points = max(round(atr_price * config.ATR_SL_MULTIPLIER / config.POINT_SIZE), config.BROKER_MIN_STOP_POINTS)
+        tp_points = max(round(atr_price * config.ATR_TP_MULTIPLIER / config.POINT_SIZE), config.BROKER_MIN_STOP_POINTS)
+
+        logger.info(
+            "order_executor: ATRベースのSL/TPを計算しました symbol=%s atr_price=%s "
+            "sl_points=%s tp_points=%s (point_size=%s)",
+            symbol,
+            atr_price,
+            sl_points,
+            tp_points,
+            config.POINT_SIZE,
+        )
+        return sl_points, tp_points
 
     def _write_request(self, request: dict, symbol: str) -> None:
         request_path = config.order_request_file_path(symbol)

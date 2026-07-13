@@ -54,8 +54,26 @@ def macd(
     )
 
 
+def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """ATR(Average True Range)をワイルダー法で計算する。high/low/close列が必要。"""
+    prev_close = df["close"].shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """ローソク足DataFrame(close列必須)に指標列を追加したコピーを返す。"""
+    """ローソク足DataFrame(close列必須)に指標列を追加したコピーを返す。
+
+    high/low列がある場合はATRも計算する(無い場合はatr列を追加しない。
+    RuleBasedAIEngineがATR必須条件を評価する際に指標未計算として扱う)。
+    """
     if "close" not in df.columns:
         raise ValueError("DataFrameに'close'列が必要です")
 
@@ -71,4 +89,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         config.MACD_SIGNAL_PERIOD,
     )
     result = pd.concat([result, macd_df], axis=1)
+
+    if "high" in result.columns and "low" in result.columns:
+        result["atr"] = atr(result, config.ATR_PERIOD)
+
     return result

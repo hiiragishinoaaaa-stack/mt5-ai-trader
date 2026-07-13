@@ -5,6 +5,7 @@ import pandas as pd
 
 import pytest
 
+import config
 from ai_engine import (
     CandleThrottledEngine,
     RuleBasedAIEngine,
@@ -15,46 +16,122 @@ from ai_engine import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _patch_scoring_config(monkeypatch):
+    """RuleBasedAIEngineのスコアリング設定をテスト間で決定的にする
+    (ENTRY_STRICTNESSプリセットの既定値変更に依存しないようにするため)。
+    """
+    monkeypatch.setattr(config, "RSI_BUY_MIN", 50.0)
+    monkeypatch.setattr(config, "RSI_BUY_MAX", 65.0)
+    monkeypatch.setattr(config, "RSI_SELL_MIN", 35.0)
+    monkeypatch.setattr(config, "RSI_SELL_MAX", 50.0)
+    monkeypatch.setattr(config, "REQUIRED_SCORE", 3)
+    monkeypatch.setattr(config, "REQUIRE_NO_NEW_EXTREME_5BARS", False)
+    monkeypatch.setattr(config, "MAX_SPREAD_POINTS", 30.0)
+    monkeypatch.setattr(config, "ATR_MIN_POINTS", 0.0)
+    monkeypatch.setattr(config, "POINT_SIZE", 0.001)
+
+
 def _row(**overrides) -> dict:
     base = {
+        "open": 150.0,
         "close": 150.0,
+        "high": 150.0,
+        "low": 150.0,
         "ema_fast": 150.0,
         "ema_slow": 150.0,
         "rsi": 50.0,
-        "macd": 0.0,
-        "macd_signal": 0.0,
         "macd_hist": 0.0,
+        "spread": 10.0,
     }
     base.update(overrides)
     return base
 
 
+def _bullish_setup_rows() -> list[dict]:
+    """必須条件を満たし、加点条件を5点フルで満たすBUY用の3本セット。"""
+    return [
+        _row(open=149.2, close=149.8, high=150.5, low=149.0, ema_fast=149.5, ema_slow=150.0, macd_hist=-0.1, rsi=50.0),
+        _row(open=149.8, close=150.2, high=151.0, low=149.5, ema_fast=150.0, ema_slow=150.0, macd_hist=0.1, rsi=55.0),
+        _row(open=150.0, close=151.0, high=151.5, low=150.0, ema_fast=151.0, ema_slow=150.0, macd_hist=0.5, rsi=58.0),
+    ]
+
+
+def _bearish_setup_rows() -> list[dict]:
+    """必須条件を満たし、加点条件を5点フルで満たすSELL用の3本セット。"""
+    return [
+        _row(open=150.8, close=150.2, high=151.0, low=149.5, ema_fast=150.5, ema_slow=150.0, macd_hist=0.1, rsi=50.0),
+        _row(open=150.2, close=149.8, high=150.5, low=149.0, ema_fast=150.0, ema_slow=150.0, macd_hist=-0.1, rsi=45.0),
+        _row(open=150.0, close=149.0, high=150.0, low=148.5, ema_fast=149.0, ema_slow=150.0, macd_hist=-0.5, rsi=42.0),
+    ]
+
+
 def test_decide_returns_buy_on_bullish_setup():
-    df = pd.DataFrame([_row(ema_fast=151.0, ema_slow=150.0, macd_hist=0.5, rsi=55.0)])
+    df = pd.DataFrame(_bullish_setup_rows())
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "BUY"
-    assert signal.confidence == 100  # 3条件すべて満たす場合のみBUYが成立するため
+    assert signal.confidence == 100  # 必須条件全て+加点5/5を満たす場合
 
 
 def test_decide_returns_sell_on_bearish_setup():
-    df = pd.DataFrame([_row(ema_fast=149.0, ema_slow=150.0, macd_hist=-0.5, rsi=45.0)])
+    df = pd.DataFrame(_bearish_setup_rows())
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "SELL"
+    assert signal.confidence == 100
 
 
-def test_decide_returns_wait_when_signals_conflict():
-    df = pd.DataFrame([_row(ema_fast=151.0, ema_slow=150.0, macd_hist=-0.5, rsi=55.0)])
+def test_decide_returns_wait_when_required_conditions_not_met():
+    """上昇トレンドだがRSIが帯域外(SELL方向の判断材料が混在)なため必須条件が未達。"""
+    df = pd.DataFrame([_row(ema_fast=151.0, ema_slow=150.0, macd_hist=-0.5, rsi=90.0)])
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "WAIT"
-    assert 0 < signal.confidence < 100  # 一部の条件(上昇トレンド)だけ満たしている
+    assert "必須条件が未達" in signal.reason
+
+
+def test_decide_returns_wait_when_required_met_but_score_insufficient():
+    """必須条件(EMA/RSI/スプレッド)は満たすが、加点条件がほぼ揃わないケース。
+
+    2本しかないため加点条件⑤(直近3本の高安値)は評価対象外になり、
+    MACDヒストグラム(方向一致のみ、拡大なし)+EMA上昇の2点しか付かない
+    (必要スコア3点に届かない)。
+    """
+    df = pd.DataFrame(
+        [
+            _row(open=150.0, close=150.0, high=150.0, low=150.0, ema_fast=150.0, ema_slow=149.0, macd_hist=0.1, rsi=55.0),
+            _row(open=150.5, close=150.5, high=150.5, low=150.5, ema_fast=150.5, ema_slow=149.0, macd_hist=0.05, rsi=55.0),
+        ]
+    )
+    engine = RuleBasedAIEngine()
+    signal = engine.decide(df)
+    assert signal.action == "WAIT"
+    assert "加点不足" in signal.reason
 
 
 def test_decide_returns_wait_on_empty_dataframe():
     engine = RuleBasedAIEngine()
     signal = engine.decide(pd.DataFrame())
+    assert signal.action == "WAIT"
+
+
+def test_decide_conservative_extra_filter_blocks_new_low(monkeypatch):
+    """REQUIRE_NO_NEW_EXTREME_5BARS有効時、直近5本の安値を更新するとBUYが
+    ブロックされる(conservativeプリセット相当)。
+    """
+    rows = _bullish_setup_rows()
+    padding = [
+        _row(low=149.6, high=150.8, close=150.0, open=150.0, ema_fast=150.2, ema_slow=150.0, rsi=55.0)
+        for _ in range(3)
+    ]
+    df = pd.DataFrame(padding + rows)
+    df.loc[df.index[-1], "low"] = 148.5  # 直近5本の最安値(149.0)を下回る
+
+    monkeypatch.setattr(config, "REQUIRE_NO_NEW_EXTREME_5BARS", True)
+    engine = RuleBasedAIEngine()
+    signal = engine.decide(df)
+
     assert signal.action == "WAIT"
 
 
