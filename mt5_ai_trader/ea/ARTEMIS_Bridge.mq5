@@ -21,6 +21,12 @@
 //|     (matched entry/exit deal pairs) so Python                     |
 //|     (trade_history_feed.py) can show real order history and       |
 //|     stats on the Dashboard instead of mock data.                  |
+//|  5) Manual close (Phase 10): reads a close-request JSON file       |
+//|     written by Python (position_closer.py, triggered by the       |
+//|     Dashboard's CLOSE button) and closes all of this EA's own      |
+//|     open positions for the configured symbol. Uses a separate     |
+//|     request/result file pair from the AI's own order flow so the  |
+//|     two never collide.                                            |
 //|                                                                    |
 //| Order execution is OFF by default (InpEnableOrders=false) and,    |
 //| even when enabled, this EA refuses to place any order unless the  |
@@ -57,7 +63,7 @@
 //| explanation of this EA instead.                                   |
 //+------------------------------------------------------------------+
 #property copyright "ARTEMIS"
-#property version   "4.02"
+#property version   "4.03"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -82,6 +88,8 @@ input int              InpTradeHistoryIntervalSec = 10;                       //
 input bool             InpEnableOrders      = false;                              // Master switch: allow this EA to place orders
 input string           InpOrderRequestFile  = "artemis_order_request.json";       // Order request file written by Python
 input string           InpOrderResultFile   = "artemis_order_result.json";        // Order result file written by this EA
+input string           InpCloseRequestFile  = "artemis_close_request.json";       // Manual close-request file written by Python (Phase 10)
+input string           InpCloseResultFile   = "artemis_close_result.json";        // Manual close-result file written by this EA (Phase 10)
 input ulong            InpMagicNumber       = 990101;                             // Magic number used to tag orders placed by this EA
 input int              InpSlippagePoints    = 20;                                 // Allowed slippage (points) for market orders
 // Some brokers (confirmed with XM/XMTrading demo servers, and documented as a
@@ -153,6 +161,7 @@ void OnTimer()
       g_last_trade_history_write = TimeCurrent();
    }
    ProcessOrderRequest();
+   ProcessCloseRequest();
 }
 
 //+------------------------------------------------------------------+
@@ -724,5 +733,138 @@ void WriteOrderResult(string request_id, bool success, string message, long retc
    if(!FileMove(tmp_name, FILE_COMMON, InpOrderResultFile, FILE_REWRITE | FILE_COMMON))
    {
       Print("ARTEMIS: failed to rename order result file, last_error=", GetLastError());
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Phase 10: read a manual close-request written by Python (the      |
+//| Dashboard's CLOSE button) and close all of this EA's own open     |
+//| positions (matched by InpMagicNumber) for the requested symbol.   |
+//| Uses its own request/result file pair, separate from             |
+//| ProcessOrderRequest()'s, so a manual close and an AI-driven order  |
+//| can never clobber each other's request file.                     |
+//+------------------------------------------------------------------+
+void ProcessCloseRequest()
+{
+   if(!g_orders_effectively_enabled)
+      return;
+
+   if(!FileIsExist(InpCloseRequestFile, FILE_COMMON))
+      return;
+
+   int handle = FileOpen(InpCloseRequestFile, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("ARTEMIS: failed to open close request file, last_error=", GetLastError());
+      return;
+   }
+
+   string json = "";
+   while(!FileIsEnding(handle))
+      json += FileReadString(handle);
+   FileClose(handle);
+
+   // Consume the request immediately so it is processed exactly once.
+   FileDelete(InpCloseRequestFile, FILE_COMMON);
+
+   string request_id = JsonGetStringValue(json, "request_id");
+   string symbol      = JsonGetStringValue(json, "symbol");
+   bool   demo_only   = JsonGetBoolValue(json, "demo_only", false);
+
+   if(request_id == "")
+   {
+      Print("ARTEMIS: close request file could not be parsed, ignoring it");
+      return;
+   }
+
+   if(!demo_only)
+   {
+      WriteCloseResult(request_id, false, 0, "rejected: demo_only flag was not true");
+      return;
+   }
+   if(!IsDemoAccount())
+   {
+      WriteCloseResult(request_id, false, 0,
+                        "rejected: this account is not recognized as a demo account "
+                        "(set InpConfirmedDemoAccount if this is actually your demo account)");
+      return;
+   }
+   if(symbol != InpSymbol)
+   {
+      WriteCloseResult(request_id, false, 0, "rejected: symbol mismatch (" + symbol + " vs " + InpSymbol + ")");
+      return;
+   }
+
+   // Snapshot matching tickets first: closing a position shifts
+   // PositionsTotal()/indices mid-loop, so iterate a fixed list instead of
+   // re-querying PositionsTotal() while closing.
+   ulong tickets[];
+   ArrayResize(tickets, 0);
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagicNumber)
+         continue;
+      int n = ArraySize(tickets);
+      ArrayResize(tickets, n + 1);
+      tickets[n] = ticket;
+   }
+
+   if(ArraySize(tickets) == 0)
+   {
+      WriteCloseResult(request_id, true, 0, "no open positions to close for this symbol");
+      return;
+   }
+
+   int closed = 0;
+   for(int i = 0; i < ArraySize(tickets); i++)
+   {
+      if(g_trade.PositionClose(tickets[i]))
+      {
+         closed++;
+      }
+      else
+      {
+         Print("ARTEMIS: failed to close position ticket=", tickets[i],
+               " retcode=", g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
+      }
+   }
+
+   string message = "closed " + IntegerToString(closed) + "/" + IntegerToString(ArraySize(tickets)) + " position(s)";
+   WriteCloseResult(request_id, closed == ArraySize(tickets), closed, message);
+}
+
+//+------------------------------------------------------------------+
+void WriteCloseResult(string request_id, bool success, int closed_count, string message)
+{
+   string tmp_name = InpCloseResultFile + ".tmp";
+   int handle = FileOpen(tmp_name, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("ARTEMIS: failed to open close result temp file, last_error=", GetLastError());
+      return;
+   }
+
+   string json = "{";
+   json += "\"request_id\":\"" + JsonEscape(request_id) + "\",";
+   json += "\"processed_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
+   json += "\"success\":" + (success ? "true" : "false") + ",";
+   json += "\"closed_count\":" + IntegerToString(closed_count) + ",";
+   json += "\"message\":\"" + JsonEscape(message) + "\"";
+   json += "}";
+
+   FileWriteString(handle, json);
+   FileClose(handle);
+
+   if(!FileMove(tmp_name, FILE_COMMON, InpCloseResultFile, FILE_REWRITE | FILE_COMMON))
+   {
+      Print("ARTEMIS: failed to rename close result file, last_error=", GetLastError());
    }
 }

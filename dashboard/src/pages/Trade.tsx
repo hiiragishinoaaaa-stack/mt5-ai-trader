@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { closePosition } from "../api/positionApi";
 import { useAccountState } from "../hooks/useAccountState";
 import { useAiStatus } from "../hooks/useAiStatus";
 import { useTradeHistory } from "../hooks/useTradeHistory";
@@ -6,15 +8,27 @@ import { Header } from "../components/Header";
 import { PageShell, PageTitle } from "../components/PageShell";
 import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
+import { Button } from "../components/Button";
 import { Eyebrow } from "../components/Eyebrow";
 import { Skeleton } from "../components/Skeleton";
+import { AlertIcon } from "../components/icons";
 import { formatDateTime, formatPrice, formatSignedCurrency } from "../lib/format";
 
 function unixToIso(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString();
 }
 
-function RealPositionCard({ position, currency }: { position: RealPosition; currency: string }) {
+function RealPositionCard({
+  position,
+  currency,
+  onClose,
+  closing,
+}: {
+  position: RealPosition;
+  currency: string;
+  onClose: () => void;
+  closing: boolean;
+}) {
   return (
     <Card className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -37,6 +51,12 @@ function RealPositionCard({ position, currency }: { position: RealPosition; curr
         <DetailRow label="TP" value={position.tp > 0 ? formatPrice(position.tp) : "—"} valueClassName="text-profit" />
         <DetailRow label="Opened" value={formatDateTime(unixToIso(position.open_time))} />
       </div>
+      {position.is_artemis ? (
+        <Button variant="danger" className="w-full" disabled={closing} onClick={onClose}>
+          <AlertIcon className="h-4 w-4" />
+          {closing ? "決済中..." : "CLOSE"}
+        </Button>
+      ) : null}
     </Card>
   );
 }
@@ -75,10 +95,27 @@ function RealHistoryItem({ trade, currency }: { trade: RealClosedTrade; currency
 }
 
 export function TradePage() {
-  const { status: acctStatus, state: acctState, message: acctMessage } = useAccountState();
+  const { status: acctStatus, state: acctState, message: acctMessage, reload: reloadAccount } = useAccountState();
   const { status: aiStatusStatus, aiStatus, message: aiStatusMessage } = useAiStatus();
   const { status: historyStatus, trades, message: historyMessage } = useTradeHistory();
   const currency = acctState?.account.currency ?? "JPY";
+  const [closing, setClosing] = useState(false);
+  const [closeMessage, setCloseMessage] = useState<string | null>(null);
+
+  async function handleClose() {
+    if (!window.confirm("ARTEMISが保有中のポジションを今すぐ決済しますか?")) return;
+    setClosing(true);
+    setCloseMessage(null);
+    try {
+      const result = await closePosition();
+      setCloseMessage(result.message);
+      if (result.success) reloadAccount();
+    } catch (err) {
+      setCloseMessage(err instanceof Error ? err.message : "決済リクエストに失敗しました");
+    } finally {
+      setClosing(false);
+    }
+  }
 
   return (
     <PageShell>
@@ -97,12 +134,19 @@ export function TradePage() {
       ) : acctState && acctState.positions.length > 0 ? (
         <div className="flex flex-col gap-3">
           {acctState.positions.map((p) => (
-            <RealPositionCard key={p.ticket} position={p} currency={acctState.account.currency} />
+            <RealPositionCard
+              key={p.ticket}
+              position={p}
+              currency={acctState.account.currency}
+              onClose={handleClose}
+              closing={closing}
+            />
           ))}
         </div>
       ) : (
         <Card className="text-sm text-ink-dim">現在保有しているポジションはありません。</Card>
       )}
+      {closeMessage ? <p className="mt-2 text-xs text-ink-faint">{closeMessage}</p> : null}
 
       <Eyebrow className="mb-2 mt-6">AI Judgement</Eyebrow>
       {aiStatusStatus === "loading" ? (

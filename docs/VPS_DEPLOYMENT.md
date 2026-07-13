@@ -282,6 +282,10 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       一致している(要EA v4.02以降。それより古いEAだとブローカーのサーバー
       時刻とUTCのズレの分だけ表示時刻がズレる。ズレていたらEAを
       再コンパイル・再適用する)
+- [ ] DashboardのTrade画面でARTEMISのポジションのCLOSEボタンを押すと、
+      確認ダイアログの後にMT5上のポジションが実際に決済される(要EA
+      v4.03以降。古いEAだとボタンを押しても`EAからの応答がタイムアウト
+      しました`のまま失敗する)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

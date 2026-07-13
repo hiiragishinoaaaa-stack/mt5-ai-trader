@@ -613,6 +613,32 @@ MQL5の`TimeCurrent()`・`POSITION_TIME`・`DEAL_TIME`・ローソク足の`time
 **EAがv4.02より前の場合、この補正は行われず、表示時刻・鮮度判定に
 ブローカーのUTCオフセット分のズレが残る。**
 
+## Dashboardからの手動決済(Phase 10)
+
+TradeページのポジションカードにあるCLOSEボタンから、ARTEMIS自身が保有する
+ポジションをその場で決済できる(PC/MT5画面が無くてもスマホから決済できる)。
+**要EA v4.03以降。**
+
+### 仕組み
+
+- 発注リクエストとは別のファイルペア(既定`artemis_close_request.json`/
+  `artemis_close_result.json`、`CLOSE_REQUEST_FILE_PATH`/
+  `CLOSE_RESULT_FILE_PATH`)を使う。main.pyのAI判断ループが送出する通常の
+  発注リクエストと、Dashboardからの手動決済リクエストが同時に発生しても
+  ファイルが衝突しないようにするため。
+- DashboardのCLOSEボタン→`POST /api/close-position`→
+  `position_closer.FilePositionCloser.close_all()`が決済リクエストを書き出す
+  →EA(`ProcessCloseRequest()`)が、`config.SYMBOL`における自分自身
+  (`InpMagicNumber`が一致する)の保有ポジションを全て`CTrade.PositionClose()`
+  で決済し、結果を書き戻す、という流れ。
+- 発注と同じ安全設計を踏襲する: `ENABLE_ORDERS`/`DEMO_ONLY`の両方が
+  有効でない限りリクエストを送出しない(Python側)。EA側も
+  `InpEnableOrders`が有効かつデモ口座と確認できない限り処理しない。
+- 保有ポジションが無い場合は「決済対象なし」として成功扱いになる
+  (エラーにはならない)。
+- 現時点では「その銘柄のARTEMIS自身の全ポジションを一括決済」のみに
+  対応する(特定の1ポジションだけを選んで決済する機能は無い)。
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

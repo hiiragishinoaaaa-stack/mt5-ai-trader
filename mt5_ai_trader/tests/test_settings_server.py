@@ -53,6 +53,10 @@ def base_url(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ACCOUNT_STATE_FILE_PATH", tmp_path / "artemis_account_state.json")
     monkeypatch.setattr(config, "AI_STATUS_FILE_PATH", tmp_path / "artemis_ai_status.json")
     monkeypatch.setattr(config, "TRADE_HISTORY_FILE_PATH", tmp_path / "artemis_trade_history.json")
+    monkeypatch.setattr(config, "CLOSE_REQUEST_FILE_PATH", tmp_path / "artemis_close_request.json")
+    monkeypatch.setattr(config, "CLOSE_RESULT_FILE_PATH", tmp_path / "artemis_close_result.json")
+    monkeypatch.setattr(config, "SYMBOL", "USDJPY")
+    monkeypatch.setattr(config, "ORDER_RESULT_WAIT_SECONDS", 2.0)
 
     server, thread, url = _start_server()
     try:
@@ -235,3 +239,63 @@ def test_get_trade_history_missing_file_returns_503(base_url):
 
     assert status == 503
     assert "error" in body
+
+
+def test_close_position_rejects_when_enable_orders_false(base_url):
+    # base_url fixtureの既定でENABLE_ORDERS=False。
+    status, body, _ = _request(f"{base_url}/api/close-position", method="POST")
+
+    assert status == 409
+    assert body["success"] is False
+    assert not config.CLOSE_REQUEST_FILE_PATH.exists()
+
+
+def test_close_position_rejects_when_demo_only_false(base_url, monkeypatch):
+    monkeypatch.setattr(config, "ENABLE_ORDERS", True)
+    # DEMO_ONLYはbase_url fixtureの既定でFalseのまま。
+
+    status, body, _ = _request(f"{base_url}/api/close-position", method="POST")
+
+    assert status == 409
+    assert body["success"] is False
+    assert not config.CLOSE_REQUEST_FILE_PATH.exists()
+
+
+def test_close_position_succeeds_when_ea_responds(base_url, monkeypatch):
+    monkeypatch.setattr(config, "ENABLE_ORDERS", True)
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+
+    def fake_ea():
+        for _ in range(50):
+            if config.CLOSE_REQUEST_FILE_PATH.exists():
+                break
+            time.sleep(0.02)
+        request = json.loads(config.CLOSE_REQUEST_FILE_PATH.read_text(encoding="utf-8"))
+        result = {
+            "request_id": request["request_id"],
+            "processed_at": time.time(),
+            "success": True,
+            "closed_count": 1,
+            "message": "closed 1/1 position(s)",
+        }
+        config.CLOSE_RESULT_FILE_PATH.write_text(json.dumps(result), encoding="utf-8")
+
+    t = threading.Thread(target=fake_ea)
+    t.start()
+    status, body, _ = _request(f"{base_url}/api/close-position", method="POST")
+    t.join()
+
+    assert status == 200
+    assert body["success"] is True
+    assert body["closed_count"] == 1
+
+
+def test_close_position_times_out_when_ea_does_not_respond(base_url, monkeypatch):
+    monkeypatch.setattr(config, "ENABLE_ORDERS", True)
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    monkeypatch.setattr(config, "ORDER_RESULT_WAIT_SECONDS", 0.3)
+
+    status, body, _ = _request(f"{base_url}/api/close-position", method="POST")
+
+    assert status == 409
+    assert body["success"] is False

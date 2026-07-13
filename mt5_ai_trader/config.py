@@ -144,6 +144,23 @@ ORDER_RESULT_FILE_PATH = (
 # EAが発注リクエストを処理し、結果ファイルを書き出すまでの最大待ち時間(秒)。
 ORDER_RESULT_WAIT_SECONDS = _env_float("ORDER_RESULT_WAIT_SECONDS", 10.0)
 
+# --- 手動決済(Phase 10: DashboardからのCLOSEボタン) ---
+# 発注リクエストとは別のファイルを使う(main.pyのAI判断ループが送出する
+# 通常の発注リクエストと、Dashboardからの手動決済リクエストが同時に
+# 発生した場合でもファイルが衝突しないようにするため)。要EA v4.03以降。
+_close_request_file_path_env = os.getenv("CLOSE_REQUEST_FILE_PATH")
+CLOSE_REQUEST_FILE_PATH = (
+    Path(_close_request_file_path_env)
+    if _close_request_file_path_env
+    else _common_files_dir() / "artemis_close_request.json"
+)
+_close_result_file_path_env = os.getenv("CLOSE_RESULT_FILE_PATH")
+CLOSE_RESULT_FILE_PATH = (
+    Path(_close_result_file_path_env)
+    if _close_result_file_path_env
+    else _common_files_dir() / "artemis_close_result.json"
+)
+
 # --- 発注テスト用モード ---
 # 通常のAI判断(BUY/SELL/WAIT)を上書きして強制する。空欄なら無効で、既存の
 # AI判断ロジックのまま動作する。値の妥当性チェックとDEMO_ONLYとの組み合わせは
