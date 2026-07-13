@@ -6,7 +6,7 @@
  * 実際の保存の可否は必ずPython側(POST /api/settings)の判定が最終決定になる
  * ため、両者がずれても壊れることはない(サーバー側のエラーも画面に表示する)。
  */
-import type { AiEngineChoice, EntryStrictness, Timeframe, TradingSettings } from "../types";
+import type { AiEngineChoice, AvailableSymbol, EntryStrictness, Timeframe, TradingSettings } from "../types";
 
 interface FieldRange {
   min: number;
@@ -32,6 +32,11 @@ export const AI_ENGINE_LABELS: Record<AiEngineChoice, string> = {
   openai: "OpenAI",
   claude: "Claude",
 };
+
+// Python側のsettings_schema.AVAILABLE_SYMBOLSと1:1で対応する(唯一の正は
+// Python側)。新しい銘柄を追加する場合は両方に追記し、MT5側にその銘柄用の
+// EAインスタンスを追加する。
+export const AVAILABLE_SYMBOLS: AvailableSymbol[] = ["USDJPY", "EURUSD"];
 
 export const ENTRY_STRICTNESS_PRESETS: Record<
   EntryStrictness,

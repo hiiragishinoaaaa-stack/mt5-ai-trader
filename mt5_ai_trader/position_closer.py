@@ -50,8 +50,13 @@ class CloseResult:
 class FilePositionCloser:
     """DashboardのCLOSEボタンを受け、決済リクエストJSONを書き出すクラス。"""
 
-    def close_all(self) -> CloseResult:
-        """config.SYMBOLの、ARTEMIS自身が保有する全ポジションの決済を要求する。
+    def close_all(self, symbol: str) -> CloseResult:
+        """指定した銘柄の、ARTEMIS自身が保有する全ポジションの決済を要求する。
+
+        symbolは複数銘柄対応(Phase 12)により呼び出し元(settings_server.py)から
+        明示的に渡される。config.ENABLED_SYMBOLSに含まれる銘柄ごとに別々の
+        リクエスト/結果ファイル(config.close_request_file_path()等)を使うため、
+        この引数で対象銘柄を特定する。
 
         戻り値はEAの処理結果。DEMO_ONLY/ENABLE_ORDERSが有効でない場合や、
         EAからの応答がタイムアウトした場合はCloseResult(success=False, ...)を返す
@@ -73,19 +78,19 @@ class FilePositionCloser:
         request = {
             "request_id": request_id,
             "created_at": time.time(),
-            "symbol": config.SYMBOL,
+            "symbol": symbol,
             "demo_only": True,
         }
 
         try:
-            self._write_request(request)
+            self._write_request(request, symbol)
         except PositionCloseError as exc:
             logger.error("position_closer: 決済リクエストの書き出しに失敗しました: %s", exc)
             return CloseResult(success=False, message=str(exc))
 
-        logger.info("position_closer: 決済リクエストを送出しました request_id=%s symbol=%s", request_id, config.SYMBOL)
+        logger.info("position_closer: 決済リクエストを送出しました request_id=%s symbol=%s", request_id, symbol)
 
-        result = self._wait_for_result(request_id)
+        result = self._wait_for_result(request_id, symbol)
         if result is None:
             logger.warning(
                 "position_closer: %s秒待っても結果を確認できませんでした(request_id=%s)。"
@@ -101,20 +106,21 @@ class FilePositionCloser:
             logger.error("position_closer: 決済に失敗しました request_id=%s message=%s", request_id, result.message)
         return result
 
-    def _write_request(self, request: dict) -> None:
-        tmp_path = config.CLOSE_REQUEST_FILE_PATH.with_suffix(".tmp")
+    def _write_request(self, request: dict, symbol: str) -> None:
+        request_path = config.close_request_file_path(symbol)
+        tmp_path = request_path.with_suffix(".tmp")
         try:
             tmp_path.parent.mkdir(parents=True, exist_ok=True)
             with tmp_path.open("w", encoding="utf-8") as f:
                 json.dump(request, f, separators=(",", ":"))
-            tmp_path.replace(config.CLOSE_REQUEST_FILE_PATH)
+            tmp_path.replace(request_path)
         except OSError as exc:
             raise PositionCloseError(f"決済リクエストの書き出しに失敗しました: {exc}") from exc
 
-    def _wait_for_result(self, request_id: str) -> CloseResult | None:
+    def _wait_for_result(self, request_id: str, symbol: str) -> CloseResult | None:
         deadline = time.monotonic() + config.ORDER_RESULT_WAIT_SECONDS
         while True:
-            payload = self._try_read_result()
+            payload = self._try_read_result(symbol)
             if payload is not None and payload.get("request_id") == request_id:
                 return CloseResult(
                     success=bool(payload.get("success")),
@@ -125,8 +131,8 @@ class FilePositionCloser:
                 return None
             time.sleep(_RESULT_POLL_INTERVAL_SECONDS)
 
-    def _try_read_result(self) -> dict | None:
-        path = config.CLOSE_RESULT_FILE_PATH
+    def _try_read_result(self, symbol: str) -> dict | None:
+        path = config.close_result_file_path(symbol)
         if not path.exists():
             return None
         try:

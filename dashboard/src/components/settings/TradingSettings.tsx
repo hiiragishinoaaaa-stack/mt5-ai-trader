@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import type { TradingSettings as TradingSettingsData } from "../../types";
 import { fetchTradingSettings, saveTradingSettings, SettingsApiError } from "../../api/settingsApi";
+import type { AvailableSymbol } from "../../types";
 import {
   AI_ENGINE_LABELS,
+  AVAILABLE_SYMBOLS,
   ENTRY_STRICTNESS_PRESETS,
   TIMEFRAME_OPTIONS,
   validateTradingSettingsDraft,
@@ -68,6 +70,14 @@ export function TradingSettings() {
       RSI_OVERBOUGHT: preset.RSI_OVERBOUGHT,
       RSI_OVERSOLD: preset.RSI_OVERSOLD,
     });
+  }
+
+  function toggleSymbol(symbol: AvailableSymbol, enabled: boolean) {
+    if (!draft) return;
+    const next = enabled
+      ? [...draft.ENABLED_SYMBOLS, symbol]
+      : draft.ENABLED_SYMBOLS.filter((s) => s !== symbol);
+    updateDraft({ ENABLED_SYMBOLS: next });
   }
 
   async function handleSave() {
@@ -231,6 +241,22 @@ export function TradingSettings() {
           error={errors.LOOP_INTERVAL_SECONDS}
           disabled={saving}
         />
+      </Card>
+
+      <Card className="flex flex-col gap-1">
+        <span className="mb-1 text-sm font-semibold text-ink">銘柄</span>
+        <span className="-mt-0.5 pb-1 text-xs text-ink-faint">
+          ONの銘柄だけがAI判断・発注の対象になる。銘柄ごとにMT5側へ別のEAインスタンスを追加する必要がある
+          (入力パラメータだけ変更、再コンパイル不要)。
+        </span>
+        {AVAILABLE_SYMBOLS.map((symbol) => (
+          <ToggleRow
+            key={symbol}
+            label={symbol}
+            checked={draft.ENABLED_SYMBOLS.includes(symbol)}
+            onChange={(checked) => toggleSymbol(symbol, checked)}
+          />
+        ))}
       </Card>
 
       <Card className="flex flex-col gap-1">

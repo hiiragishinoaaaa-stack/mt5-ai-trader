@@ -669,6 +669,65 @@ v4.04以降。**
   v4.04へのEA再コンパイル・再設置が必要(手順はREADME/デプロイ手順の
   「MT5でのEA再設置」を参照)。
 
+## 複数銘柄対応(Phase 12: DashboardからのON/OFF切り替え)
+
+Settings画面の「銘柄」セクションで、USDJPY以外の銘柄(現時点ではEURUSD)を
+ON/OFFできる。ONにした銘柄それぞれについて、main.pyが独立に価格取得→AI
+判断→(条件が揃えば)発注を行う。
+
+### 仕組み
+
+- `config.ENABLED_SYMBOLS`(既定は`(SYMBOL,)` = USDJPYのみ)に含まれる
+  銘柄それぞれについて、main.pyの`run_once()`が1サイクルごとに価格取得
+  →指標計算→AI判断→発注を行う(`_run_symbol_cycle()`参照)。
+- **EA自体は銘柄をコードにハードコードしていない**(`InpSymbol`はEAの
+  入力パラメータ)。そのため新しい銘柄を追加するのに**MetaEditorでの
+  再コンパイルは不要**で、同じ`ARTEMIS_Bridge.mq5`を銘柄ごとに別チャート
+  へ追加し、入力パラメータだけ変えればよい。
+- プライマリ銘柄(`config.SYMBOL`、通常USDJPY)は既存のファイル名
+  (`artemis_market_data.json`等)をそのまま使う(後方互換、既存のEA
+  インスタンスは何も変更不要)。それ以外の銘柄は、ファイル名の拡張子の前に
+  `_<銘柄名の小文字>` を挿入した別ファイルを使う(`config._for_symbol()`
+  参照。例: EURUSDなら`artemis_market_data_eurusd.json`)。これにより、
+  複数のEAインスタンスが互いのリクエスト/結果ファイルを衝突させずに使える。
+- 口座残高・保有ポジション一覧(`artemis_account_state.json`)と決済済み
+  取引履歴(`artemis_trade_history.json`)は、EAが元々MT5口座全体(銘柄を
+  問わず)を対象に書き出す設計だったため、**この2つだけはどのEAインスタンス
+  も同じファイル名のままでよい**(複数のEAインスタンスが同じ内容を重複して
+  書き込むだけで、競合や不整合は起きない)。
+
+### MT5側で新しい銘柄(例: EURUSD)を追加する手順(PC/RDPが必要)
+
+1. MT5のマーケットウォッチにEURUSDを表示する(無ければ右クリック→
+   「すべて表示」)
+2. EURUSDのチャートを新しく開く
+3. ナビゲータから`ARTEMIS_Bridge`をそのチャートへドラッグ&ドロップする
+   (USDJPY用のチャートとは別の、独立した2つ目のEAインスタンスになる)
+4. 入力パラメータ画面で、以下だけをUSDJPY用のインスタンスと変えて設定する
+   (他の項目、特にDemo Only関連の設定は同じでよい):
+   - `InpSymbol` = `EURUSD`
+   - `InpFileName` = `artemis_market_data_eurusd.json`
+   - `InpAccountStateFile` = `artemis_account_state.json`(USDJPY側と**同じ**でよい)
+   - `InpTradeHistoryFile` = `artemis_trade_history.json`(USDJPY側と**同じ**でよい)
+   - `InpOrderRequestFile` = `artemis_order_request_eurusd.json`
+   - `InpOrderResultFile` = `artemis_order_result_eurusd.json`
+   - `InpCloseRequestFile` = `artemis_close_request_eurusd.json`
+   - `InpCloseResultFile` = `artemis_close_result_eurusd.json`
+   - `InpEaConfigFile` = `artemis_ea_config_eurusd.json`(EA v4.04以降のみ)
+   - `InpMagicNumber` はUSDJPY用と**別の値**にする(例: 990102。同じ値だと
+     ポジション集計・決済がUSDJPY/EURUSDを混同する可能性がある)
+5. 「自動売買」を有効にしてOKを押す
+6. Dashboard Settingsの「銘柄」でEURUSDをONにする
+
+### 制限事項
+
+- 現時点でAVAILABLE_SYMBOLS(選べる銘柄)は`USDJPY`/`EURUSD`の2つのみ
+  (`settings_schema.AVAILABLE_SYMBOLS`)。他の銘柄を追加したい場合は
+  Python側・Dashboard側両方の`AVAILABLE_SYMBOLS`定数に追記した上で、
+  上記と同じ手順でMT5側にもEAインスタンスを追加する。
+- ORDER_VOLUME/SL_POINTS/TP_POINTS/RSI/EMA等の売買パラメータは、現時点では
+  全銘柄で共通の値を使う(銘柄ごとに別の値を設定する機能は無い)。
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

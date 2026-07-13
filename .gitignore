@@ -168,6 +168,11 @@ mt5_ai_trader/artemis_daily_summary_state.json
 mt5_ai_trader/artemis_close_notifier_state.json
 # ARTEMIS: main.pyが各サイクルで書き出すEA向けTIMEFRAME設定(ea_config_writer.py)。
 mt5_ai_trader/artemis_ea_config.json
+# ARTEMIS: 複数銘柄対応(Phase 12)。プライマリ銘柄(SYMBOL)以外の銘柄は
+# artemis_*_<銘柄名小文字>.json という別ファイルに書き出される
+# (config._for_symbol()参照)。新しい銘柄をAVAILABLE_SYMBOLSに追加した
+# 場合はここにもパターンを追加すること。
+mt5_ai_trader/artemis_*_eurusd.json
 .venv
 env/
 venv/

@@ -127,10 +127,10 @@ class _FakeAiEngine:
 
 class _RecordingOrderExecutor:
     def __init__(self):
-        self.calls: list[tuple[Signal, str | None]] = []
+        self.calls: list[tuple[Signal, str, str | None]] = []
 
-    def submit_if_needed(self, signal, request_id=None):
-        self.calls.append((signal, request_id))
+    def submit_if_needed(self, signal, symbol, request_id=None):
+        self.calls.append((signal, symbol, request_id))
         return None
 
 
@@ -145,8 +145,9 @@ def test_run_once_uses_force_signal_and_forwards_request_id(monkeypatch):
     assert signal is not None
     assert signal.action == "BUY"
     assert len(order_executor.calls) == 1
-    submitted_signal, submitted_request_id = order_executor.calls[0]
+    submitted_signal, submitted_symbol, submitted_request_id = order_executor.calls[0]
     assert submitted_signal.action == "BUY"
+    assert submitted_symbol == config.SYMBOL
     assert submitted_request_id == "test-req-1"
 
 
@@ -270,7 +271,7 @@ def test_run_once_writes_ea_config_every_cycle_regardless_of_bot_run_state(monke
     import ea_config_writer
 
     calls = []
-    monkeypatch.setattr(ea_config_writer, "write_ea_config", lambda tf: calls.append(tf))
+    monkeypatch.setattr(ea_config_writer, "write_ea_config", lambda tf, symbol: calls.append((tf, symbol)))
     monkeypatch.setattr(config, "TIMEFRAME", "M1")
     monkeypatch.setattr(config, "BOT_RUN_STATE", "STOPPED")
 
@@ -280,13 +281,13 @@ def test_run_once_writes_ea_config_every_cycle_regardless_of_bot_run_state(monke
 
     main_module.run_once(feed, ai_engine, order_executor)
 
-    assert calls == ["M1"]
+    assert calls == [("M1", config.SYMBOL)]
 
 
 def test_run_once_ea_config_write_error_does_not_break_cycle(monkeypatch):
     import ea_config_writer
 
-    def _raise(timeframe):
+    def _raise(timeframe, symbol):
         raise OSError("boom")
 
     monkeypatch.setattr(ea_config_writer, "write_ea_config", _raise)

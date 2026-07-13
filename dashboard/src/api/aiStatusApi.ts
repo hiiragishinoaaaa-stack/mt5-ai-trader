@@ -4,6 +4,10 @@
  *
  * main.pyがまだ一度も判断を書き出していない(起動直後・停止中)場合、
  * サーバーは503を返す。これは接続エラーとは区別し、「データ待ち」として扱う。
+ *
+ * symbolを省略するとPython側のプライマリ銘柄(config.SYMBOL)が対象になる。
+ * 複数銘柄対応(Phase 12)により、有効な銘柄それぞれについてこの関数を
+ * 呼び分けることでAI Judgementを銘柄ごとに表示できる。
  */
 import type { RealAiStatus } from "../types";
 import { apiBaseUrl, authHeaders } from "./botApiClient";
@@ -13,10 +17,11 @@ export class AiStatusApiError extends Error {}
 /** main.pyがまだAI判断を書き出していない場合に送出される(接続エラーとは区別する)。 */
 export class AiStatusUnavailableError extends Error {}
 
-export async function fetchAiStatus(): Promise<RealAiStatus> {
+export async function fetchAiStatus(symbol?: string): Promise<RealAiStatus> {
+  const query = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
   let res: Response;
   try {
-    res = await fetch(`${apiBaseUrl()}/api/ai-status`, {
+    res = await fetch(`${apiBaseUrl()}/api/ai-status${query}`, {
       headers: { ...authHeaders() },
     });
   } catch (err) {

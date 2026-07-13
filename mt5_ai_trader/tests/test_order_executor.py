@@ -48,7 +48,7 @@ def _write_fake_ea_result(request_id: str, success: bool, message: str = "ok", t
 
 def test_wait_signal_does_not_write_request():
     executor = order_executor.FileOrderExecutor()
-    result = executor.submit_if_needed(Signal("WAIT", "no trend", {}))
+    result = executor.submit_if_needed(Signal("WAIT", "no trend", {}), config.SYMBOL)
 
     assert result is None
     assert not config.ORDER_REQUEST_FILE_PATH.exists()
@@ -58,7 +58,7 @@ def test_demo_only_false_does_not_write_request(monkeypatch):
     monkeypatch.setattr(config, "DEMO_ONLY", False)
     executor = order_executor.FileOrderExecutor()
 
-    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
 
     assert result is None
     assert not config.ORDER_REQUEST_FILE_PATH.exists()
@@ -68,7 +68,7 @@ def test_enable_orders_false_does_not_write_request(monkeypatch):
     monkeypatch.setattr(config, "ENABLE_ORDERS", False)
     executor = order_executor.FileOrderExecutor()
 
-    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
 
     assert result is None
     assert not config.ORDER_REQUEST_FILE_PATH.exists()
@@ -79,7 +79,7 @@ def test_bot_run_state_not_running_does_not_write_request(monkeypatch, bot_run_s
     monkeypatch.setattr(config, "BOT_RUN_STATE", bot_run_state)
     executor = order_executor.FileOrderExecutor()
 
-    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
 
     assert result is None
     assert not config.ORDER_REQUEST_FILE_PATH.exists()
@@ -101,7 +101,7 @@ def test_buy_signal_writes_request_with_expected_fields():
 
     t = threading.Thread(target=fake_ea)
     t.start()
-    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
     t.join()
 
     request = _read_request()
@@ -133,7 +133,7 @@ def test_sell_signal_failure_result_is_reported():
 
     t = threading.Thread(target=fake_ea)
     t.start()
-    result = executor.submit_if_needed(Signal("SELL", "downtrend", {}))
+    result = executor.submit_if_needed(Signal("SELL", "downtrend", {}), config.SYMBOL)
     t.join()
 
     assert result is not None
@@ -145,7 +145,7 @@ def test_no_result_file_times_out_gracefully(monkeypatch):
     monkeypatch.setattr(config, "ORDER_RESULT_WAIT_SECONDS", 0.2)
     executor = order_executor.FileOrderExecutor()
 
-    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
 
     assert result is None
     assert config.ORDER_REQUEST_FILE_PATH.exists()  # リクエスト自体は書き出されている
@@ -166,7 +166,7 @@ def test_explicit_request_id_is_used_in_request_file():
 
     t = threading.Thread(target=fake_ea)
     t.start()
-    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), request_id="fixed-test-id-1")
+    result = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL, request_id="fixed-test-id-1")
     t.join()
 
     assert _read_request()["request_id"] == "fixed-test-id-1"
@@ -179,15 +179,15 @@ def test_same_request_id_is_not_submitted_twice(monkeypatch):
     executor = order_executor.FileOrderExecutor()
 
     write_calls: list[dict] = []
-    monkeypatch.setattr(executor, "_write_request", lambda req: write_calls.append(req))
+    monkeypatch.setattr(executor, "_write_request", lambda req, symbol: write_calls.append(req))
     monkeypatch.setattr(
         executor,
         "_wait_for_result",
-        lambda request_id: order_executor.OrderResult(success=True, message="ok", ticket=1, retcode=10009),
+        lambda request_id, symbol: order_executor.OrderResult(success=True, message="ok", ticket=1, retcode=10009),
     )
 
-    first = executor.submit_if_needed(Signal("BUY", "uptrend", {}), request_id="dup-id")
-    second = executor.submit_if_needed(Signal("BUY", "uptrend", {}), request_id="dup-id")
+    first = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL, request_id="dup-id")
+    second = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL, request_id="dup-id")
 
     assert first is not None
     assert first.success is True
@@ -200,15 +200,15 @@ def test_omitted_request_id_generates_unique_ids_each_call(monkeypatch):
     executor = order_executor.FileOrderExecutor()
 
     write_calls: list[dict] = []
-    monkeypatch.setattr(executor, "_write_request", lambda req: write_calls.append(req))
+    monkeypatch.setattr(executor, "_write_request", lambda req, symbol: write_calls.append(req))
     monkeypatch.setattr(
         executor,
         "_wait_for_result",
-        lambda request_id: order_executor.OrderResult(success=True, message="ok"),
+        lambda request_id, symbol: order_executor.OrderResult(success=True, message="ok"),
     )
 
-    first = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
-    second = executor.submit_if_needed(Signal("BUY", "uptrend", {}))
+    first = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
+    second = executor.submit_if_needed(Signal("BUY", "uptrend", {}), config.SYMBOL)
 
     assert first is not None and second is not None
     assert len(write_calls) == 2

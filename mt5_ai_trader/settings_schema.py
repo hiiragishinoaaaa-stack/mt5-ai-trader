@@ -17,6 +17,12 @@ from typing import Any
 
 TIMEFRAME_CHOICES = ("M1", "M5", "M15", "M30", "H1", "H4", "D1")
 
+# Dashboardの「銘柄」トグルで選べる候補一覧(Phase 12)。ここに無い銘柄は
+# ENABLED_SYMBOLSに指定してもバリデーションエラーになる。新しい銘柄を
+# 追加する場合はここへ追記し、MT5側にその銘柄用のEAインスタンスを
+# (別チャートへ、入力パラメータだけ変えて)追加する。
+AVAILABLE_SYMBOLS = ("USDJPY", "EURUSD")
+
 # DashboardのSettings画面から選べるAI判断エンジン。OPENAI_API_KEY/
 # ANTHROPIC_API_KEYはセキュリティ上の理由でFIELDSに含めない(.envでのみ設定、
 # config.pyのコメント参照)。
@@ -68,6 +74,7 @@ FIELDS: dict[str, FieldSpec] = {
     "DISCORD_NOTIFY_DAILY_SUMMARY": FieldSpec("DISCORD_NOTIFY_DAILY_SUMMARY", bool),
     "BOT_RUN_STATE": FieldSpec("BOT_RUN_STATE", str, choices=BOT_RUN_STATE_CHOICES),
     "AI_ENGINE": FieldSpec("AI_ENGINE", str, choices=AI_ENGINE_CHOICES),
+    "ENABLED_SYMBOLS": FieldSpec("ENABLED_SYMBOLS", list, choices=AVAILABLE_SYMBOLS),
 }
 
 
@@ -89,6 +96,10 @@ def coerce(raw_value: Any, spec: FieldSpec) -> Any:
         if not isinstance(raw_value, str):
             raise TypeError("str型である必要があります")
         return raw_value
+    if spec.type is list:
+        if not isinstance(raw_value, list) or not all(isinstance(v, str) for v in raw_value):
+            raise TypeError("文字列のリストである必要があります")
+        return list(raw_value)
     raise TypeError(f"未対応の型です: {spec.type}")
 
 
@@ -114,7 +125,15 @@ def validate(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
             errors[key] = f"{key}は{spec.type.__name__}型の値を指定してください"
             continue
 
-        if spec.choices is not None and value not in spec.choices:
+        if spec.choices is not None and spec.type is list:
+            invalid = [v for v in value if v not in spec.choices]
+            if invalid:
+                errors[key] = (
+                    f"{key}に無効な値が含まれています: {', '.join(invalid)}"
+                    f"(選べるのは{', '.join(spec.choices)})"
+                )
+                continue
+        elif spec.choices is not None and value not in spec.choices:
             errors[key] = f"{key}は次のいずれかを指定してください: {', '.join(spec.choices)}"
             continue
 

@@ -67,12 +67,19 @@ class FileOrderExecutor:
         # 送出済みのrequest_idを覚えておき、同じIDでの再送出(二重発注)を防ぐ。
         self._submitted_request_ids: set[str] = set()
 
-    def submit_if_needed(self, signal: Signal, request_id: str | None = None) -> OrderResult | None:
+    def submit_if_needed(
+        self, signal: Signal, symbol: str, request_id: str | None = None
+    ) -> OrderResult | None:
         """signalがBUY/SELLの場合のみ発注リクエストを送出する。
 
         WAITの場合は何もしない。DEMO_ONLY=falseの場合も何もしない
         (安全のための既定OFF)。戻り値はEAの処理結果、または
         (送出しなかった/結果を確認できなかった)場合はNone。
+
+        symbolは複数銘柄対応(Phase 12)により呼び出し元(main.py)から
+        明示的に渡される。config.ENABLED_SYMBOLSに含まれる銘柄ごとに
+        別々のリクエスト/結果ファイル(config.order_request_file_path()等)
+        を使うため、この引数で対象銘柄を特定する。
 
         request_idを明示的に渡した場合(発注テスト用モード)、同じIDで
         既に送出済みであれば新たなリクエストは書き出さずスキップする。
@@ -123,7 +130,7 @@ class FileOrderExecutor:
             "request_id": resolved_request_id,
             "created_at": time.time(),
             "action": signal.action,
-            "symbol": config.SYMBOL,
+            "symbol": symbol,
             "volume": config.ORDER_VOLUME,
             "sl_points": config.SL_POINTS,
             "tp_points": config.TP_POINTS,
@@ -131,20 +138,20 @@ class FileOrderExecutor:
             "demo_only": True,
         }
 
-        self._write_request(request)
+        self._write_request(request, symbol)
         logger.info(
             "order_executor: %s発注リクエストを送出しました request_id=%s action=%s symbol=%s "
             "volume=%s sl_points=%s tp_points=%s",
             tag,
             resolved_request_id,
             signal.action,
-            config.SYMBOL,
+            symbol,
             config.ORDER_VOLUME,
             config.SL_POINTS,
             config.TP_POINTS,
         )
 
-        result = self._wait_for_result(resolved_request_id)
+        result = self._wait_for_result(resolved_request_id, symbol)
         if result is None:
             logger.warning(
                 "order_executor: %s%s秒待っても結果を確認できませんでした(request_id=%s)。"
@@ -154,7 +161,7 @@ class FileOrderExecutor:
                 resolved_request_id,
             )
             discord_notifier.notify_order_failed(
-                signal.action, config.SYMBOL, "EAからの応答がタイムアウトしました(MT5が動作していない可能性があります)"
+                signal.action, symbol, "EAからの応答がタイムアウトしました(MT5が動作していない可能性があります)"
             )
             return None
 
@@ -167,7 +174,7 @@ class FileOrderExecutor:
                 result.message,
             )
             discord_notifier.notify_trade_executed(
-                signal.action, config.SYMBOL, config.ORDER_VOLUME, result.ticket, result.message
+                signal.action, symbol, config.ORDER_VOLUME, result.ticket, result.message
             )
         else:
             logger.error(
@@ -177,11 +184,12 @@ class FileOrderExecutor:
                 result.retcode,
                 result.message,
             )
-            discord_notifier.notify_order_failed(signal.action, config.SYMBOL, result.message)
+            discord_notifier.notify_order_failed(signal.action, symbol, result.message)
         return result
 
-    def _write_request(self, request: dict) -> None:
-        tmp_path = config.ORDER_REQUEST_FILE_PATH.with_suffix(".tmp")
+    def _write_request(self, request: dict, symbol: str) -> None:
+        request_path = config.order_request_file_path(symbol)
+        tmp_path = request_path.with_suffix(".tmp")
         try:
             tmp_path.parent.mkdir(parents=True, exist_ok=True)
             with tmp_path.open("w", encoding="utf-8") as f:
@@ -189,14 +197,14 @@ class FileOrderExecutor:
                 # 実装だった場合に備え、区切り文字にスペースを入れないコンパクトな
                 # 形式で書き出す。json.dump()の既定(", " / ": ")は使わない。
                 json.dump(request, f, separators=(",", ":"))
-            tmp_path.replace(config.ORDER_REQUEST_FILE_PATH)  # アトミックにリネーム
+            tmp_path.replace(request_path)  # アトミックにリネーム
         except OSError as exc:
             raise OrderExecutionError(f"発注リクエストの書き出しに失敗しました: {exc}") from exc
 
-    def _wait_for_result(self, request_id: str) -> OrderResult | None:
+    def _wait_for_result(self, request_id: str, symbol: str) -> OrderResult | None:
         deadline = time.monotonic() + config.ORDER_RESULT_WAIT_SECONDS
         while True:
-            payload = self._try_read_result()
+            payload = self._try_read_result(symbol)
             if payload is not None and payload.get("request_id") == request_id:
                 return OrderResult(
                     success=bool(payload.get("success")),
@@ -208,8 +216,8 @@ class FileOrderExecutor:
                 return None
             time.sleep(_RESULT_POLL_INTERVAL_SECONDS)
 
-    def _try_read_result(self) -> dict | None:
-        path = config.ORDER_RESULT_FILE_PATH
+    def _try_read_result(self, symbol: str) -> dict | None:
+        path = config.order_result_file_path(symbol)
         if not path.exists():
             return None
         try:

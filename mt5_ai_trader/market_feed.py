@@ -76,7 +76,7 @@ class FileMarketFeed:
             if max_staleness_seconds is not None
             else config.MARKET_DATA_MAX_STALENESS_SECONDS
         )
-        file_path = config.MARKET_DATA_FILE_PATH
+        file_path = config.market_data_file_path(symbol)
 
         if not file_path.exists():
             raise MarketFeedError(

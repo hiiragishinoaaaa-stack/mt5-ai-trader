@@ -293,6 +293,12 @@ sudo ufw allow from <自分のグローバルIP> to any port 8787 proto tcp
       `cat <common_files_dir>/artemis_ea_config.json`で`timeframe`が
       最新の値になっているか確認。古いEAのままだとPython側のラベル表示
       のみ変わり、実際の時間軸は`InpTimeframe`の値のまま変わらない)
+- [ ] Dashboard SettingsでUSDJPY以外(例: EURUSD)をONにすると、その銘柄の
+      価格取得・AI判断ログも`journalctl -u artemis-bot -f`に流れ始める
+      (要MT5側にその銘柄用のEAインスタンスを別チャートへ追加済みのこと。
+      手順は`mt5_ai_trader/README.md`のPhase 12参照。追加していない場合は
+      `[EURUSD] 価格データの取得に失敗しました`というログが出るだけで、
+      USDJPY側の動作には影響しない)
 - [ ] VPS再起動後、`systemctl status artemis-settings-server artemis-bot artemis-dashboard`
       が3つとも `active (running)` になっている
 - [ ] (MT5自動起動を設定した場合)VPS再起動後、`systemctl status artemis-xvfb artemis-mt5`

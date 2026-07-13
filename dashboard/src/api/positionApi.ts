@@ -1,7 +1,7 @@
 /**
  * settings_server.py(Python)の POST /api/close-position への実際のHTTPクライアント。
  *
- * TradeページのCLOSEボタンから呼ばれる。config.SYMBOLのARTEMIS自身の
+ * TradeページのCLOSEボタンから呼ばれる。指定した銘柄のARTEMIS自身の
  * 全ポジションを決済するようEA(要v4.03以降)へ要求する(position_closer.py
  * を参照)。ENABLE_ORDERS/DEMO_ONLYが有効でない場合や、EAが応答しない場合は
  * success: falseで返る(例外は投げない)。
@@ -16,12 +16,13 @@ export interface ClosePositionResult {
   closedCount: number;
 }
 
-export async function closePosition(): Promise<ClosePositionResult> {
+export async function closePosition(symbol: string): Promise<ClosePositionResult> {
   let res: Response;
   try {
     res = await fetch(`${apiBaseUrl()}/api/close-position`, {
       method: "POST",
-      headers: { ...authHeaders() },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ symbol }),
     });
   } catch (err) {
     throw new ClosePositionApiError(

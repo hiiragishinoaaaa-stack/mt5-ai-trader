@@ -175,6 +175,64 @@ EA_CONFIG_FILE_PATH = (
     else _common_files_dir() / "artemis_ea_config.json"
 )
 
+# --- 複数銘柄対応(Phase 12: DashboardからのON/OFF切り替え) ---
+# main.pyはconfig.ENABLED_SYMBOLSに含まれる銘柄それぞれについて、価格取得
+# →AI判断→発注を独立に行う(1銘柄=1EAインスタンスがMT5側に必要。EA自体は
+# 銘柄をコード内にハードコードしていないため、同じEA(ARTEMIS_Bridge.mq5)を
+# 銘柄ごとに別チャートへ追加し、入力パラメータ(InpSymbol・各種ファイル名)
+# だけを変えて設置する。EA側の再コンパイルは不要)。
+#
+# 選べる銘柄の一覧はsettings_schema.AVAILABLE_SYMBOLSが唯一の正
+# (Dashboardのトグル一覧・バリデーション両方がここを参照する)。
+#
+# 既定値はSYMBOL(プライマリ銘柄)定義の直後で設定する(下記「取引対象」
+# セクション参照。ここではまだSYMBOLが定義されていないため代入できない)。
+# config.json経由でDashboardから変更できる(settings_schema.FIELDSの
+# ENABLED_SYMBOLS参照)。
+
+
+def _for_symbol(path: Path, symbol: str) -> Path:
+    """ファイルブリッジのパスを銘柄ごとに振り分ける。
+
+    プライマリ銘柄(config.SYMBOL、既にVPSで稼働中のEAインスタンスが使っている
+    ファイル名)はそのまま返す(後方互換、追加のPC作業なしで動き続ける)。
+    それ以外の銘柄は拡張子の前に "_(小文字の銘柄名)" を挿入した別ファイル名を
+    返す。これにより、銘柄ごとに別々のEAインスタンス(別チャートに追加した
+    もの)がお互いのリクエスト/結果ファイルを衝突させずに使える。
+    """
+    if symbol == SYMBOL:
+        return path
+    return path.with_name(f"{path.stem}_{symbol.lower()}{path.suffix}")
+
+
+def market_data_file_path(symbol: str) -> Path:
+    return _for_symbol(MARKET_DATA_FILE_PATH, symbol)
+
+
+def order_request_file_path(symbol: str) -> Path:
+    return _for_symbol(ORDER_REQUEST_FILE_PATH, symbol)
+
+
+def order_result_file_path(symbol: str) -> Path:
+    return _for_symbol(ORDER_RESULT_FILE_PATH, symbol)
+
+
+def close_request_file_path(symbol: str) -> Path:
+    return _for_symbol(CLOSE_REQUEST_FILE_PATH, symbol)
+
+
+def close_result_file_path(symbol: str) -> Path:
+    return _for_symbol(CLOSE_RESULT_FILE_PATH, symbol)
+
+
+def ea_config_file_path(symbol: str) -> Path:
+    return _for_symbol(EA_CONFIG_FILE_PATH, symbol)
+
+
+def ai_status_file_path(symbol: str) -> Path:
+    return _for_symbol(AI_STATUS_FILE_PATH, symbol)
+
+
 # --- 発注テスト用モード ---
 # 通常のAI判断(BUY/SELL/WAIT)を上書きして強制する。空欄なら無効で、既存の
 # AI判断ロジックのまま動作する。値の妥当性チェックとDEMO_ONLYとの組み合わせは
@@ -189,6 +247,9 @@ TEST_ORDER_ONCE = _env_bool("TEST_ORDER_ONCE", False)
 SYMBOL = os.getenv("SYMBOL", "USDJPY")
 TIMEFRAME = os.getenv("TIMEFRAME", "M15")
 BARS_COUNT = _env_int("BARS_COUNT", 100)
+# 複数銘柄対応(Phase 12)の既定値。SYMBOL定義の直後でなければ参照できない
+# ため、このタイミングで設定する(上の「複数銘柄対応」コメント参照)。
+ENABLED_SYMBOLS: tuple[str, ...] | list[str] = (SYMBOL,)
 
 # --- インジケーター設定 ---
 EMA_FAST_PERIOD = _env_int("EMA_FAST_PERIOD", 9)

@@ -131,6 +131,51 @@ def apply_force_signal(signal: Signal, force_signal: str) -> Signal:
     )
 
 
+def _run_symbol_cycle(
+    feed: FileMarketFeed,
+    ai_engine,
+    order_executor: FileOrderExecutor,
+    symbol: str,
+    force_signal: str,
+    request_id: str | None,
+) -> Signal | None:
+    """1銘柄分のデータ取得 → 指標計算 → AI判断 → (必要なら発注) を行う。
+
+    複数銘柄対応(Phase 12)により、run_once()がconfig.ENABLED_SYMBOLSの
+    銘柄それぞれについてこの関数を呼び出す。データ取得や判断、発注の
+    どこで例外が起きても、ここで捕捉してログに残し、他の銘柄の処理や
+    呼び出し元(ループ)を止めない。
+    """
+    try:
+        snapshot = feed.read_snapshot(symbol, config.TIMEFRAME)
+        enriched = indicators.add_indicators(snapshot.candles)
+        signal = ai_engine.decide(enriched)
+        signal = apply_force_signal(signal, force_signal)
+
+        message = (
+            f"[{symbol}] bid={snapshot.tick.bid} ask={snapshot.tick.ask} "
+            f"=> {signal.action} ({signal.reason})"
+        )
+        print(message)
+        logger.info(message)
+        logger.debug("signal details: %s", signal.details)
+
+        try:
+            ai_status.write_status(signal, symbol, config.TIMEFRAME)
+        except OSError:
+            logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
+
+        order_executor.submit_if_needed(signal, symbol, request_id=request_id)
+
+        return signal
+    except MarketFeedError as exc:
+        logger.error("[%s] 価格データの取得に失敗しました: %s", symbol, exc)
+        return None
+    except Exception:
+        logger.exception("[%s] 判断処理中に予期しないエラーが発生しました", symbol)
+        return None
+
+
 def run_once(
     feed: FileMarketFeed,
     ai_engine,
@@ -139,22 +184,28 @@ def run_once(
     request_id: str | None = None,
     trade_history_feed: FileTradeHistoryFeed | None = None,
 ) -> Signal | None:
-    """1回分のデータ取得 → 指標計算 → AI判断 → (必要なら発注) → ログ出力を行う。
+    """1回分のサイクルを実行する(config.ENABLED_SYMBOLSの銘柄それぞれについて
+    データ取得 → 指標計算 → AI判断 → (必要なら発注) → ログ出力を行う)。
 
     データ取得や判断、発注のどこで例外が起きても、ここで捕捉してログに残し、
     呼び出し元(ループ)を落とさない。
 
     先頭でconfig.load_config_json()を呼び、Dashboardからconfig.jsonが
     更新されていれば設定を再読込してから今回のサイクルを実行する。
+
+    戻り値はプライマリ銘柄(config.SYMBOL)のSignal(他の有効銘柄の判断は
+    副作用としてai_status/発注リクエストに反映されるのみで、戻り値には
+    含まれない。TEST_ORDER_ONCE等の既存の呼び出し元との後方互換のため)。
     """
     if config.load_config_json():
         logger.info(
-            "設定を再読込しました: enable_orders=%s demo_only=%s symbol=%s timeframe=%s "
-            "order_volume=%s sl_points=%s tp_points=%s ema_fast=%s ema_slow=%s "
+            "設定を再読込しました: enable_orders=%s demo_only=%s symbol=%s enabled_symbols=%s "
+            "timeframe=%s order_volume=%s sl_points=%s tp_points=%s ema_fast=%s ema_slow=%s "
             "rsi_overbought=%s rsi_oversold=%s entry_strictness=%s loop_interval=%s秒",
             config.ENABLE_ORDERS,
             config.DEMO_ONLY,
             config.SYMBOL,
+            config.ENABLED_SYMBOLS,
             config.TIMEFRAME,
             config.ORDER_VOLUME,
             config.SL_POINTS,
@@ -167,10 +218,13 @@ def run_once(
             config.LOOP_INTERVAL_SECONDS,
         )
 
-    try:
-        ea_config_writer.write_ea_config(config.TIMEFRAME)
-    except OSError:
-        logger.exception("EA設定ファイルの書き出しに失敗しました(TIMEFRAMEの自動反映のみに影響)")
+    for symbol in config.ENABLED_SYMBOLS:
+        try:
+            ea_config_writer.write_ea_config(config.TIMEFRAME, symbol)
+        except OSError:
+            logger.exception(
+                "[%s] EA設定ファイルの書き出しに失敗しました(TIMEFRAMEの自動反映のみに影響)", symbol
+            )
 
     history_feed = trade_history_feed or FileTradeHistoryFeed()
 
@@ -191,41 +245,20 @@ def run_once(
             else "停止中です(DashboardのSTARTボタンで再開できます)"
         )
         signal = Signal(action="WAIT", reason=reason, details={})
-        try:
-            ai_status.write_status(signal, config.SYMBOL, config.TIMEFRAME)
-        except OSError:
-            logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
+        for symbol in config.ENABLED_SYMBOLS:
+            try:
+                ai_status.write_status(signal, symbol, config.TIMEFRAME)
+            except OSError:
+                logger.exception("[%s] AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)", symbol)
         logger.info("BOT_RUN_STATE=%s のため判断・発注をスキップします", config.BOT_RUN_STATE)
         return signal
 
-    try:
-        snapshot = feed.read_snapshot(config.SYMBOL, config.TIMEFRAME)
-        enriched = indicators.add_indicators(snapshot.candles)
-        signal = ai_engine.decide(enriched)
-        signal = apply_force_signal(signal, force_signal)
-
-        message = (
-            f"[{config.SYMBOL}] bid={snapshot.tick.bid} ask={snapshot.tick.ask} "
-            f"=> {signal.action} ({signal.reason})"
-        )
-        print(message)
-        logger.info(message)
-        logger.debug("signal details: %s", signal.details)
-
-        try:
-            ai_status.write_status(signal, config.SYMBOL, config.TIMEFRAME)
-        except OSError:
-            logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
-
-        order_executor.submit_if_needed(signal, request_id=request_id)
-
-        return signal
-    except MarketFeedError as exc:
-        logger.error("価格データの取得に失敗しました: %s", exc)
-        return None
-    except Exception:
-        logger.exception("判断処理中に予期しないエラーが発生しました")
-        return None
+    primary_signal: Signal | None = None
+    for symbol in config.ENABLED_SYMBOLS:
+        signal = _run_symbol_cycle(feed, ai_engine, order_executor, symbol, force_signal, request_id)
+        if symbol == config.SYMBOL:
+            primary_signal = signal
+    return primary_signal
 
 
 def parse_args() -> argparse.Namespace:

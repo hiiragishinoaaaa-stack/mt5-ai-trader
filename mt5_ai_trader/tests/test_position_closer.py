@@ -44,7 +44,7 @@ def test_enable_orders_false_does_not_write_request(monkeypatch):
     monkeypatch.setattr(config, "ENABLE_ORDERS", False)
     closer = position_closer.FilePositionCloser()
 
-    result = closer.close_all()
+    result = closer.close_all("USDJPY")
 
     assert result.success is False
     assert not config.CLOSE_REQUEST_FILE_PATH.exists()
@@ -54,7 +54,7 @@ def test_demo_only_false_does_not_write_request(monkeypatch):
     monkeypatch.setattr(config, "DEMO_ONLY", False)
     closer = position_closer.FilePositionCloser()
 
-    result = closer.close_all()
+    result = closer.close_all("USDJPY")
 
     assert result.success is False
     assert not config.CLOSE_REQUEST_FILE_PATH.exists()
@@ -73,7 +73,7 @@ def test_close_all_writes_request_with_expected_fields():
 
     t = threading.Thread(target=fake_ea)
     t.start()
-    result = closer.close_all()
+    result = closer.close_all("USDJPY")
     t.join()
 
     request = _read_request()
@@ -96,7 +96,7 @@ def test_close_all_reports_failure_from_ea():
 
     t = threading.Thread(target=fake_ea)
     t.start()
-    result = closer.close_all()
+    result = closer.close_all("USDJPY")
     t.join()
 
     assert result.success is False
@@ -107,7 +107,7 @@ def test_close_all_no_result_file_times_out_gracefully(monkeypatch):
     monkeypatch.setattr(config, "ORDER_RESULT_WAIT_SECONDS", 0.2)
     closer = position_closer.FilePositionCloser()
 
-    result = closer.close_all()
+    result = closer.close_all("USDJPY")
 
     assert result.success is False
     assert "タイムアウト" in result.message

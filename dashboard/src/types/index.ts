@@ -45,6 +45,10 @@ export type EntryStrictness = "conservative" | "balanced" | "aggressive";
 // Dashboardには出さず.envでのみ設定するため、ここにキーのフィールドは無い。
 export type AiEngineChoice = "rule_based" | "openai" | "claude";
 
+// Dashboardの「銘柄」トグルで選べる候補一覧。Python側の
+// settings_schema.AVAILABLE_SYMBOLSと1:1で対応する(唯一の正はPython側)。
+export type AvailableSymbol = "USDJPY" | "EURUSD";
+
 export interface TradingSettings {
   ORDER_VOLUME: number;
   SL_POINTS: number;
@@ -66,6 +70,7 @@ export interface TradingSettings {
   DISCORD_NOTIFY_DAILY_SUMMARY: boolean;
   BOT_RUN_STATE: BotRunState;
   AI_ENGINE: AiEngineChoice;
+  ENABLED_SYMBOLS: AvailableSymbol[];
 }
 
 // --- 実際にPython側(account_feed.py経由でEAが書き出すJSON)から取得する

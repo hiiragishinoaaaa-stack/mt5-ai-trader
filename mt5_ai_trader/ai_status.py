@@ -30,7 +30,12 @@ class AiStatusSnapshot:
 
 
 def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
-    """main.pyの各サイクルの最後に呼び出し、最新の判断を書き出す。"""
+    """main.pyの各サイクルの最後に呼び出し、最新の判断を書き出す。
+
+    複数銘柄対応(Phase 12)により、銘柄ごとに別ファイル(config.
+    ai_status_file_path())へ書き出す(config.SYMBOLと一致する場合は
+    従来通りのファイル名のまま、後方互換)。
+    """
     payload = {
         "action": signal.action,
         "confidence": signal.confidence,
@@ -39,21 +44,22 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
         "timeframe": timeframe,
         "updated_at": time.time(),
     }
-    tmp_path = config.AI_STATUS_FILE_PATH.with_suffix(".tmp")
+    file_path = config.ai_status_file_path(symbol)
+    tmp_path = file_path.with_suffix(".tmp")
     tmp_path.parent.mkdir(parents=True, exist_ok=True)
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
-    tmp_path.replace(config.AI_STATUS_FILE_PATH)
+    tmp_path.replace(file_path)
 
 
-def read_status(max_staleness_seconds: float | None = None) -> AiStatusSnapshot:
-    """settings_server.pyから呼び出され、最新のAI判断を返す。"""
+def read_status(symbol: str, max_staleness_seconds: float | None = None) -> AiStatusSnapshot:
+    """settings_server.pyから呼び出され、指定した銘柄の最新のAI判断を返す。"""
     max_staleness_seconds = (
         max_staleness_seconds
         if max_staleness_seconds is not None
         else config.AI_STATUS_MAX_STALENESS_SECONDS
     )
-    file_path = config.AI_STATUS_FILE_PATH
+    file_path = config.ai_status_file_path(symbol)
 
     if not file_path.exists():
         raise AiStatusError(

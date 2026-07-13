@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { closePosition } from "../api/positionApi";
 import { useAccountState } from "../hooks/useAccountState";
-import { useAiStatus } from "../hooks/useAiStatus";
+import { useEnabledSymbols } from "../hooks/useEnabledSymbols";
+import { useMultiAiStatus } from "../hooks/useAiStatus";
 import { useTradeHistory } from "../hooks/useTradeHistory";
 import type { RealClosedTrade, RealPosition } from "../types";
 import { Header } from "../components/Header";
@@ -26,7 +27,7 @@ function RealPositionCard({
 }: {
   position: RealPosition;
   currency: string;
-  onClose: () => void;
+  onClose: (symbol: string) => void;
   closing: boolean;
 }) {
   return (
@@ -52,7 +53,7 @@ function RealPositionCard({
         <DetailRow label="Opened" value={formatDateTime(unixToIso(position.open_time))} />
       </div>
       {position.is_artemis ? (
-        <Button variant="danger" className="w-full" disabled={closing} onClick={onClose}>
+        <Button variant="danger" className="w-full" disabled={closing} onClick={() => onClose(position.symbol)}>
           <AlertIcon className="h-4 w-4" />
           {closing ? "決済中..." : "CLOSE"}
         </Button>
@@ -96,24 +97,25 @@ function RealHistoryItem({ trade, currency }: { trade: RealClosedTrade; currency
 
 export function TradePage() {
   const { status: acctStatus, state: acctState, message: acctMessage, reload: reloadAccount } = useAccountState();
-  const { status: aiStatusStatus, aiStatus, message: aiStatusMessage } = useAiStatus();
+  const enabledSymbols = useEnabledSymbols();
+  const aiStatusBySymbol = useMultiAiStatus(enabledSymbols);
   const { status: historyStatus, trades, message: historyMessage } = useTradeHistory();
   const currency = acctState?.account.currency ?? "JPY";
-  const [closing, setClosing] = useState(false);
+  const [closingSymbol, setClosingSymbol] = useState<string | null>(null);
   const [closeMessage, setCloseMessage] = useState<string | null>(null);
 
-  async function handleClose() {
-    if (!window.confirm("ARTEMISが保有中のポジションを今すぐ決済しますか?")) return;
-    setClosing(true);
+  async function handleClose(symbol: string) {
+    if (!window.confirm(`ARTEMISが保有中の${symbol}のポジションを今すぐ決済しますか?`)) return;
+    setClosingSymbol(symbol);
     setCloseMessage(null);
     try {
-      const result = await closePosition();
+      const result = await closePosition(symbol);
       setCloseMessage(result.message);
       if (result.success) reloadAccount();
     } catch (err) {
       setCloseMessage(err instanceof Error ? err.message : "決済リクエストに失敗しました");
     } finally {
-      setClosing(false);
+      setClosingSymbol(null);
     }
   }
 
@@ -139,7 +141,7 @@ export function TradePage() {
               position={p}
               currency={acctState.account.currency}
               onClose={handleClose}
-              closing={closing}
+              closing={closingSymbol === p.symbol}
             />
           ))}
         </div>
@@ -149,25 +151,54 @@ export function TradePage() {
       {closeMessage ? <p className="mt-2 text-xs text-ink-faint">{closeMessage}</p> : null}
 
       <Eyebrow className="mb-2 mt-6">AI Judgement</Eyebrow>
-      {aiStatusStatus === "loading" ? (
-        <Card>
-          <Skeleton className="h-16 w-full" />
-        </Card>
-      ) : aiStatusStatus === "connection_error" ? (
-        <Card className="text-sm text-loss">Bot APIに接続できません。settings_server.pyが起動しているか確認してください。</Card>
-      ) : aiStatusStatus === "data_unavailable" ? (
-        <Card className="text-sm text-ink-dim">{aiStatusMessage || "AIの判断がまだ届いていません。main.pyが起動しているか確認してください。"}</Card>
-      ) : aiStatus ? (
-        <Card className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Badge tone={aiStatus.action === "BUY" ? "profit" : aiStatus.action === "SELL" ? "loss" : "neutral"}>
-              {aiStatus.action}
-            </Badge>
-            <span className="text-xs text-ink-faint">Confidence {aiStatus.confidence}%</span>
-          </div>
-          <p className="text-sm leading-relaxed text-ink-dim">{aiStatus.reason}</p>
-        </Card>
-      ) : null}
+      {enabledSymbols.length === 0 ? (
+        <Card className="text-sm text-ink-dim">Settingsで有効な銘柄がありません。</Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {enabledSymbols.map((symbol) => {
+            const entry = aiStatusBySymbol[symbol];
+            const entryStatus = entry?.status ?? "loading";
+            return (
+              <div key={symbol}>
+                {enabledSymbols.length > 1 ? (
+                  <span className="mb-1 block text-xs font-semibold text-ink-faint">{symbol}</span>
+                ) : null}
+                {entryStatus === "loading" ? (
+                  <Card>
+                    <Skeleton className="h-16 w-full" />
+                  </Card>
+                ) : entryStatus === "connection_error" ? (
+                  <Card className="text-sm text-loss">
+                    Bot APIに接続できません。settings_server.pyが起動しているか確認してください。
+                  </Card>
+                ) : entryStatus === "data_unavailable" ? (
+                  <Card className="text-sm text-ink-dim">
+                    {entry?.message || "AIの判断がまだ届いていません。main.pyが起動しているか確認してください。"}
+                  </Card>
+                ) : entry?.aiStatus ? (
+                  <Card className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <Badge
+                        tone={
+                          entry.aiStatus.action === "BUY"
+                            ? "profit"
+                            : entry.aiStatus.action === "SELL"
+                              ? "loss"
+                              : "neutral"
+                        }
+                      >
+                        {entry.aiStatus.action}
+                      </Badge>
+                      <span className="text-xs text-ink-faint">Confidence {entry.aiStatus.confidence}%</span>
+                    </div>
+                    <p className="text-sm leading-relaxed text-ink-dim">{entry.aiStatus.reason}</p>
+                  </Card>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <Eyebrow className="mb-2 mt-6">Order History</Eyebrow>
       {historyStatus === "loading" ? (
