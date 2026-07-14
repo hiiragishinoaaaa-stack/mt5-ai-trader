@@ -48,7 +48,7 @@ class AIEngine(ABC):
         raise NotImplementedError
 
 
-_BONUS_CONDITION_COUNT = 5
+_BONUS_CONDITION_COUNT = 6
 
 
 class RuleBasedAIEngine(AIEngine):
@@ -78,17 +78,21 @@ class RuleBasedAIEngine(AIEngine):
     6. ATR(points換算) >= ATR_MIN_POINTS(ATR_MIN_POINTS<=0なら無効。
        値動きが小さすぎるレンジ相場での無駄なエントリーを防ぐ)
     7. MACDヒストグラムが方向と一致(>0)
-    8. MACDヒストグラムが前足よりその方向へ拡大(縮小中=勢い喪失時は除外)
-    9. (REQUIRE_NO_NEW_EXTREME_5BARS有効時のみ)直近5本(最新を除く)の
+    8. (REQUIRE_NO_NEW_EXTREME_5BARS有効時のみ)直近5本(最新を除く)の
        安値を更新していない
     SELLはBUYの左右対称(EMA/RSI/高安値・H1・押し目の向きが逆)。
 
-    ## 加点条件(各1点、最大5点)
+    「MACDヒストグラムが前足よりその方向へ拡大しているか」はかつて必須条件
+    だったが、M15では同時に成立する瞬間が稀すぎてエントリー機会が
+    極端に減ってしまったため、加点条件へ格下げした(2026-07)。
+
+    ## 加点条件(各1点、最大6点)
     1. EMA(短期)の傾きが方向と一致(前足より上/下)
     2. 直近ローソク足の実体が方向と一致(陽線/陰線)
     3. 直近3本の安値(BUY)/高値(SELL)がその方向へ切り上がって/切り下がっている
     4. RSIが50を方向側へ超えている(BUYなら>50、SELLなら<50。モメンタム確認)
     5. 上位足(H1)のEMA(短期)自体も方向に傾いている(H1判定不能時は付与しない)
+    6. MACDヒストグラムが前足よりその方向へ拡大している(勢いの加速を確認)
 
     必須条件を全て満たし、加点スコアがREQUIRED_SCORE以上ならBUY/SELL、
     そうでなければWAITを返す。details には score/required_score/
@@ -125,7 +129,6 @@ class RuleBasedAIEngine(AIEngine):
             "スプレッド許容内": spread_ok,
             "ATR最低値以上": atr_ok,
             "MACDヒストグラムが方向一致": latest["macd_hist"] > 0,
-            "MACDヒストグラムが拡大方向": macd_expanding == "BUY",
         }
         sell_required = {
             "下降トレンド(EMA)": latest["ema_fast"] < latest["ema_slow"],
@@ -135,7 +138,6 @@ class RuleBasedAIEngine(AIEngine):
             "スプレッド許容内": spread_ok,
             "ATR最低値以上": atr_ok,
             "MACDヒストグラムが方向一致": latest["macd_hist"] < 0,
-            "MACDヒストグラムが拡大方向": macd_expanding == "SELL",
         }
 
         if config.REQUIRE_NO_NEW_EXTREME_5BARS:
@@ -143,8 +145,8 @@ class RuleBasedAIEngine(AIEngine):
             buy_required["直近5本の安値を更新せず"] = no_new_low
             sell_required["直近5本の高値を更新せず"] = no_new_high
 
-        buy_score, buy_bonus_reasons = self._bonus_score(df, "BUY", h1_details)
-        sell_score, sell_bonus_reasons = self._bonus_score(df, "SELL", h1_details)
+        buy_score, buy_bonus_reasons = self._bonus_score(df, "BUY", h1_details, macd_expanding)
+        sell_score, sell_bonus_reasons = self._bonus_score(df, "SELL", h1_details, macd_expanding)
 
         buy_ok = all(buy_required.values())
         sell_ok = all(sell_required.values())
@@ -302,7 +304,9 @@ class RuleBasedAIEngine(AIEngine):
         no_new_high = bool(latest["high"] <= window["high"].max())
         return no_new_low, no_new_high
 
-    def _bonus_score(self, df: pd.DataFrame, direction: str, h1_details: dict[str, Any]) -> tuple[int, list[str]]:
+    def _bonus_score(
+        self, df: pd.DataFrame, direction: str, h1_details: dict[str, Any], macd_expanding: str | None
+    ) -> tuple[int, list[str]]:
         latest = df.iloc[-1]
         is_buy = direction == "BUY"
         score = 0
@@ -340,6 +344,10 @@ class RuleBasedAIEngine(AIEngine):
             if (is_buy and h1_slope_up) or (not is_buy and not h1_slope_up):
                 score += 1
                 reasons.append("上位足(H1)のEMAも方向一致")
+
+        if macd_expanding == direction:
+            score += 1
+            reasons.append("MACDヒストグラムが拡大方向")
 
         return score, reasons
 

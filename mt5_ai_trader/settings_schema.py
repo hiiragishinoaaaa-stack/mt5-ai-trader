@@ -49,10 +49,10 @@ BOT_RUN_STATE_CHOICES = ("RUNNING", "STOPPED", "EMERGENCY_STOPPED")
 # での積極運用を想定したプリセット(詳細はREADME.mdの「複数銘柄対応」の後、
 # 「M5アクティブ運用」セクションを参照)。
 # REQUIRED_SCOREは、勝率優先ロジック(RuleBasedAIEngine、H1トレンドフィルター・
-# 押し目待ち・MACD方向+拡大が必須条件化された後)のボーナス条件5点満点に
-# 対する必要点数。必須条件自体が以前よりずっと厳しくなっているため、
-# 各プリセットのREQUIRED_SCOREも底上げしている(aggressiveでも以前の
-# balanced相当以上)。
+# 押し目待ち・MACD方向一致が必須条件化された後)のボーナス条件6点満点に
+# 対する必要点数(MACD拡大は2026-07にボーナス条件へ格下げ。ai_engine.py
+# 参照)。必須条件自体が以前よりずっと厳しくなっているため、各プリセットの
+# REQUIRED_SCOREも底上げしている(aggressiveでも以前のbalanced相当以上)。
 ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
     "conservative": {
         "RSI_BUY_MIN": 52.0,
@@ -129,7 +129,7 @@ FIELDS: dict[str, FieldSpec] = {
     "RSI_BUY_MAX": FieldSpec("RSI_BUY_MAX", float, min_value=0.0, max_value=100.0),
     "RSI_SELL_MIN": FieldSpec("RSI_SELL_MIN", float, min_value=0.0, max_value=100.0),
     "RSI_SELL_MAX": FieldSpec("RSI_SELL_MAX", float, min_value=0.0, max_value=100.0),
-    "REQUIRED_SCORE": FieldSpec("REQUIRED_SCORE", int, min_value=0, max_value=5),
+    "REQUIRED_SCORE": FieldSpec("REQUIRED_SCORE", int, min_value=0, max_value=6),
     "REQUIRE_NO_NEW_EXTREME_5BARS": FieldSpec("REQUIRE_NO_NEW_EXTREME_5BARS", bool),
     "POINT_SIZE": FieldSpec("POINT_SIZE", float, min_value=0.000001, max_value=10.0),
     "MAX_SPREAD_POINTS": FieldSpec("MAX_SPREAD_POINTS", float, min_value=0.0, max_value=100_000.0),

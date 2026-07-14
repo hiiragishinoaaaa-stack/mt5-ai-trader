@@ -55,8 +55,8 @@ def _row(**overrides) -> dict:
 
 
 def _bullish_setup_rows() -> list[dict]:
-    """必須条件(押し目待ち・MACD方向+拡大を含む)を満たし、加点条件も
-    (H1データなしのため最大4/5点で)フルに満たすBUY用の5本セット。
+    """必須条件(押し目待ち・MACD方向一致を含む)を満たし、加点条件も
+    (H1データなしのため最大5/6点で)フルに満たすBUY用の5本セット。
 
     idx0: 基準。idx1-3: 押し目判定のlookbackウィンドウ(idx1でEMAから
     十分上に離れる=押し目の起点)。idx4: 最新足(EMA近くまで押し目が
@@ -87,8 +87,8 @@ def test_decide_returns_buy_on_bullish_setup():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "BUY"
-    # H1データ(time列)が無いためH1加点は付かず、4/5点が上限。
-    assert signal.details["score"] == 4
+    # H1データ(time列)が無いためH1加点は付かず、5/6点が上限。
+    assert signal.details["score"] == 5
 
 
 def test_decide_returns_sell_on_bearish_setup():
@@ -96,7 +96,7 @@ def test_decide_returns_sell_on_bearish_setup():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "SELL"
-    assert signal.details["score"] == 4
+    assert signal.details["score"] == 5
 
 
 def test_decide_returns_wait_when_required_conditions_not_met():
@@ -109,12 +109,14 @@ def test_decide_returns_wait_when_required_conditions_not_met():
 
 
 def test_decide_returns_wait_when_required_met_but_score_insufficient():
-    """必須条件(トレンド・H1・押し目・RSI・MACD方向+拡大)は満たすが、
-    加点条件(EMAの傾き・陽線)が揃わないため必要スコアに届かないケース。
+    """必須条件(トレンド・H1・押し目・RSI・MACD方向一致)は満たすが、
+    加点条件(EMAの傾き・陽線・MACD拡大)が揃わないため必要スコアに
+    届かないケース。
 
-    _bullish_setup_rows()の最新足だけ、EMAの傾きを横ばい・実体を陰線に
-    変える(押し目・MACD等の必須条件はそのまま満たす)。加点は
-    RSI>50・3本安値切り上げの2点のみ(必要スコア3点に届かない)。
+    _bullish_setup_rows()の最新足だけ、EMAの傾きを横ばい・実体を陰線・
+    MACDヒストグラムを縮小方向に変える(押し目・MACD方向一致等の必須条件は
+    そのまま満たす)。加点はRSI>50・3本安値切り上げの2点のみ(必要スコア
+    3点に届かない)。
     """
     rows = _bullish_setup_rows()
     rows[-1] = _row(
@@ -124,7 +126,7 @@ def test_decide_returns_wait_when_required_met_but_score_insufficient():
         low=149.3,
         ema_fast=149.5,  # 前足(idx3)と同値=傾き横ばい(EMA傾き加点なし)
         ema_slow=148.0,
-        macd_hist=0.25,  # 前足(0.2)より拡大=必須条件は満たす
+        macd_hist=0.15,  # 前足(0.2)より縮小=方向一致は満たすが拡大加点はなし
         rsi=58.0,
     )
     df = pd.DataFrame(rows)
@@ -214,21 +216,25 @@ def test_decide_blocks_entry_without_pullback():
     assert "押し目からの回復" in signal.details["failed_required"]["BUY"]
 
 
-def test_decide_blocks_entry_when_macd_histogram_not_expanding():
-    """MACDヒストグラムが方向自体は合っていても縮小中(勢い喪失)の場合、
-    他の必須条件が揃っていてもBUYは弾かれる。
+def test_decide_awards_bonus_but_does_not_block_when_macd_not_expanding():
+    """MACDヒストグラムの拡大(勢いの加速)は加点条件であり、方向自体さえ
+    合っていれば拡大していなくても必須条件はブロックされない(2026-07に
+    必須条件から加点条件へ格下げ。ai_engine.pyのdocstring参照)。拡大時より
+    加点が1点減るだけ。
     """
     rows = _bullish_setup_rows()
-    # 最新足のMACDヒストグラムを前足(0.2)より縮小させる。
+    # 最新足のMACDヒストグラムを前足(0.2)より縮小させる(方向=+のままなので
+    # 必須条件「MACDヒストグラムが方向一致」は満たす)。
     rows[-1] = _row(
         open=149.6, close=149.85, high=149.95, low=149.4,
-        ema_fast=149.7, ema_slow=148.0, macd_hist=0.1, rsi=58.0,
+        ema_fast=149.7, ema_slow=148.0, macd_hist=0.15, rsi=58.0,
     )
     df = pd.DataFrame(rows)
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
-    assert signal.action == "WAIT"
-    assert "MACDヒストグラムが拡大方向" in signal.details["failed_required"]["BUY"]
+    assert signal.action == "BUY"
+    assert signal.details["score"] == 4  # フル5点からMACD拡大加点(-1)
+    assert "MACDヒストグラムが拡大方向" not in signal.details["bonus_reasons"]
 
 
 def test_get_ai_engine_returns_rule_based_by_default():
