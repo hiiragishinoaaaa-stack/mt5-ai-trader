@@ -27,6 +27,9 @@ class AiStatusSnapshot:
     symbol: str
     timeframe: str
     updated_at: float
+    score: int | None = None
+    required_score: int | None = None
+    failed_required: dict[str, list[str]] | None = None
 
 
 def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
@@ -35,6 +38,11 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
     複数銘柄対応(Phase 12)により、銘柄ごとに別ファイル(config.
     ai_status_file_path())へ書き出す(config.SYMBOLと一致する場合は
     従来通りのファイル名のまま、後方互換)。
+
+    score/required_score/failed_required(勝率優先ロジック⑩)は
+    signal.details(ai_engine.RuleBasedAIEngine参照)から取り出し、
+    Dashboardが構造化して表示できるようにする。RuleBasedAIEngine以外
+    (LLM系エンジン等)ではdetailsに含まれないため、その場合はnull。
     """
     payload = {
         "action": signal.action,
@@ -43,6 +51,9 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
         "symbol": symbol,
         "timeframe": timeframe,
         "updated_at": time.time(),
+        "score": signal.details.get("score"),
+        "required_score": signal.details.get("required_score"),
+        "failed_required": signal.details.get("failed_required") or None,
     }
     file_path = config.ai_status_file_path(symbol)
     tmp_path = file_path.with_suffix(".tmp")
@@ -91,6 +102,9 @@ def read_status(symbol: str, max_staleness_seconds: float | None = None) -> AiSt
             symbol=str(payload["symbol"]),
             timeframe=str(payload["timeframe"]),
             updated_at=float(payload["updated_at"]),
+            score=payload.get("score"),
+            required_score=payload.get("required_score"),
+            failed_required=payload.get("failed_required"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise AiStatusError(f"AI判断ファイルの形式が不正です: {exc}") from exc

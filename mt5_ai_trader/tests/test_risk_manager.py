@@ -210,6 +210,85 @@ def test_max_daily_loss_percent_ignores_yesterdays_losses(monkeypatch):
     assert result.allowed is True
 
 
+def test_same_direction_min_bars_blocks_same_direction_entry(monkeypatch):
+    monkeypatch.setattr(config, "SAME_DIRECTION_MIN_BARS", 2)
+    monkeypatch.setattr(config, "TIMEFRAME", "M15")  # 1本=900秒、2本=1800秒
+    now = time.time()
+    positions = [_position(type="BUY", open_time=int(now) - 100)]  # 1800秒未満
+    result = risk_manager.check_entry_allowed(
+        "USDJPY",
+        _FakeHistoryFeed(),
+        _FakeAccountFeed(positions=positions),
+        now=now,
+        direction="BUY",
+    )
+    assert result.allowed is False
+    assert "同方向" in result.reason
+
+
+def test_same_direction_min_bars_ignores_opposite_direction(monkeypatch):
+    monkeypatch.setattr(config, "SAME_DIRECTION_MIN_BARS", 2)
+    monkeypatch.setattr(config, "TIMEFRAME", "M15")
+    now = time.time()
+    positions = [_position(type="BUY", open_time=int(now) - 100)]
+    result = risk_manager.check_entry_allowed(
+        "USDJPY",
+        _FakeHistoryFeed(),
+        _FakeAccountFeed(positions=positions),
+        now=now,
+        direction="SELL",  # 直近のBUYとは逆方向なのでブロックされない
+    )
+    assert result.allowed is True
+
+
+def test_same_direction_min_bars_allows_after_elapsed(monkeypatch):
+    monkeypatch.setattr(config, "SAME_DIRECTION_MIN_BARS", 2)
+    monkeypatch.setattr(config, "TIMEFRAME", "M15")
+    now = time.time()
+    positions = [_position(type="BUY", open_time=int(now) - 2000)]  # 1800秒以上経過
+    result = risk_manager.check_entry_allowed(
+        "USDJPY",
+        _FakeHistoryFeed(),
+        _FakeAccountFeed(positions=positions),
+        now=now,
+        direction="BUY",
+    )
+    assert result.allowed is True
+
+
+def test_reentry_min_atr_mult_blocks_close_price(monkeypatch):
+    monkeypatch.setattr(config, "REENTRY_MIN_ATR_MULT", 0.5)
+    now = time.time()
+    positions = [_position(type="SELL", price_open=157.0, open_time=int(now) - 5000)]
+    result = risk_manager.check_entry_allowed(
+        "USDJPY",
+        _FakeHistoryFeed(),
+        _FakeAccountFeed(positions=positions),
+        now=now,
+        direction="BUY",
+        current_price=157.02,  # 前回エントリー価格から0.02(atr=1.0で0.02×ATR)しか離れていない
+        atr_price=1.0,
+    )
+    assert result.allowed is False
+    assert "エントリー価格" in result.reason
+
+
+def test_reentry_min_atr_mult_allows_far_price(monkeypatch):
+    monkeypatch.setattr(config, "REENTRY_MIN_ATR_MULT", 0.5)
+    now = time.time()
+    positions = [_position(type="SELL", price_open=157.0, open_time=int(now) - 5000)]
+    result = risk_manager.check_entry_allowed(
+        "USDJPY",
+        _FakeHistoryFeed(),
+        _FakeAccountFeed(positions=positions),
+        now=now,
+        direction="BUY",
+        current_price=158.0,  # 1.0×ATR離れている
+        atr_price=1.0,
+    )
+    assert result.allowed is True
+
+
 def test_missing_history_data_does_not_block_entry():
     result = risk_manager.check_entry_allowed("USDJPY", _FakeHistoryFeed(error=True), _FakeAccountFeed())
     assert result.allowed is True

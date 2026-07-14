@@ -61,11 +61,39 @@ def _open_times_for_symbol(
     return times
 
 
+def _recent_entries_for_symbol(
+    symbol: str,
+    closed_trades: list[ClosedTrade],
+    account_feed: FileAccountFeed,
+) -> list[tuple[float, float, str]]:
+    """ARTEMIS自身のその銘柄のエントリーを(open_time, price_open, type)で返す。
+
+    _open_times_for_symbolと同じ考え方(決済済み+保有中の両方)だが、
+    同方向連続エントリー禁止・同価格帯再エントリー禁止の判定には価格と
+    売買方向も必要なため、こちらは別関数として用意する。
+    """
+    entries = [(float(t.open_time), float(t.price_open), t.type) for t in closed_trades]
+    try:
+        state = account_feed.read_state()
+    except AccountFeedError:
+        state = None
+    if state is not None:
+        entries.extend(
+            (float(p.open_time), float(p.price_open), p.type)
+            for p in state.positions
+            if p.symbol == symbol and p.is_artemis
+        )
+    return entries
+
+
 def check_entry_allowed(
     symbol: str,
     history_feed: FileTradeHistoryFeed | None = None,
     account_feed: FileAccountFeed | None = None,
     now: float | None = None,
+    direction: str | None = None,
+    current_price: float | None = None,
+    atr_price: float | None = None,
 ) -> RiskCheckResult:
     """指定した銘柄に新規エントリーしてよいか判定する。
 
@@ -73,6 +101,11 @@ def check_entry_allowed(
     チェック項目は「判定不能」として素通しする(安全側に倒しすぎて何も
     取引できなくなるのを避けるため。他のチェックがブロックしていれば
     そちらが優先される)。
+
+    direction("BUY"/"SELL")・current_price・atr_priceは、勝率優先ロジックの
+    2つの再エントリー制御(SAME_DIRECTION_MIN_BARS・REENTRY_MIN_ATR_MULT)
+    にのみ使う追加の任意引数。省略した場合、その2チェックはスキップされる
+    (main.py以外からの呼び出し・既存テストとの後方互換のため)。
     """
     history_feed = history_feed or FileTradeHistoryFeed()
     account_feed = account_feed or FileAccountFeed()
@@ -152,5 +185,41 @@ def check_entry_allowed(
                         f"本日の損失が上限({config.MAX_DAILY_LOSS_PERCENT}%)に達しています"
                         f"(現在約{loss_percent:.1f}%)",
                     )
+
+    # 5) 同方向の連続エントリー禁止(直近の同方向エントリーからSAME_DIRECTION_MIN_BARS本未満)
+    if direction and config.SAME_DIRECTION_MIN_BARS > 0:
+        entries = _recent_entries_for_symbol(symbol, symbol_trades, account_feed)
+        same_direction_times = [t for t, _price, typ in entries if typ == direction]
+        if same_direction_times:
+            last_same = max(same_direction_times)
+            min_gap = config.SAME_DIRECTION_MIN_BARS * config.timeframe_seconds(config.TIMEFRAME)
+            elapsed = now - last_same
+            if elapsed < min_gap:
+                remaining = int(min_gap - elapsed)
+                return RiskCheckResult(
+                    False,
+                    f"同方向({direction})の連続エントリー禁止中です(残り約{remaining}秒、"
+                    f"最低{config.SAME_DIRECTION_MIN_BARS}本分空ける設定)",
+                )
+
+    # 6) 同価格帯での再エントリー禁止(直前エントリー価格からREENTRY_MIN_ATR_MULT×ATR以内)
+    if (
+        direction
+        and current_price is not None
+        and atr_price is not None
+        and atr_price > 0
+        and config.REENTRY_MIN_ATR_MULT > 0
+    ):
+        entries = _recent_entries_for_symbol(symbol, symbol_trades, account_feed)
+        if entries:
+            _last_time, last_price, _last_type = max(entries, key=lambda e: e[0])
+            distance_atr = abs(current_price - last_price) / atr_price
+            if distance_atr < config.REENTRY_MIN_ATR_MULT:
+                return RiskCheckResult(
+                    False,
+                    f"直前のエントリー価格({last_price})に近すぎます"
+                    f"(現在価格との差={distance_atr:.2f}×ATR、"
+                    f"最低{config.REENTRY_MIN_ATR_MULT}×ATR必要)",
+                )
 
     return RiskCheckResult(True)

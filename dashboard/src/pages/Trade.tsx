@@ -191,7 +191,22 @@ export function TradePage() {
                       </Badge>
                       <span className="text-xs text-ink-faint">Confidence {entry.aiStatus.confidence}%</span>
                     </div>
+                    {entry.aiStatus.score !== null && entry.aiStatus.required_score !== null ? (
+                      <span className="text-xs font-semibold text-ink-faint">
+                        Score {entry.aiStatus.score}/{entry.aiStatus.required_score}
+                      </span>
+                    ) : null}
                     <p className="text-sm leading-relaxed text-ink-dim">{entry.aiStatus.reason}</p>
+                    {entry.aiStatus.failed_required ? (
+                      <div className="text-xs text-ink-faint">
+                        {entry.aiStatus.failed_required.BUY.length > 0 ? (
+                          <p>BUY見送り理由: {entry.aiStatus.failed_required.BUY.join(" / ")}</p>
+                        ) : null}
+                        {entry.aiStatus.failed_required.SELL.length > 0 ? (
+                          <p>SELL見送り理由: {entry.aiStatus.failed_required.SELL.join(" / ")}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </Card>
                 ) : null}
               </div>

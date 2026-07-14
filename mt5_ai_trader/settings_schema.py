@@ -48,13 +48,18 @@ BOT_RUN_STATE_CHOICES = ("RUNNING", "STOPPED", "EMERGENCY_STOPPED")
 # クールダウン/時間・日あたりの最大取引数もまとめて切り替える、USDJPY・M5
 # での積極運用を想定したプリセット(詳細はREADME.mdの「複数銘柄対応」の後、
 # 「M5アクティブ運用」セクションを参照)。
+# REQUIRED_SCOREは、勝率優先ロジック(RuleBasedAIEngine、H1トレンドフィルター・
+# 押し目待ち・MACD方向+拡大が必須条件化された後)のボーナス条件5点満点に
+# 対する必要点数。必須条件自体が以前よりずっと厳しくなっているため、
+# 各プリセットのREQUIRED_SCOREも底上げしている(aggressiveでも以前の
+# balanced相当以上)。
 ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
     "conservative": {
         "RSI_BUY_MIN": 52.0,
         "RSI_BUY_MAX": 62.0,
         "RSI_SELL_MIN": 38.0,
         "RSI_SELL_MAX": 48.0,
-        "REQUIRED_SCORE": 4,
+        "REQUIRED_SCORE": 5,
         "REQUIRE_NO_NEW_EXTREME_5BARS": True,
     },
     "balanced": {
@@ -62,7 +67,7 @@ ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
         "RSI_BUY_MAX": 65.0,
         "RSI_SELL_MIN": 35.0,
         "RSI_SELL_MAX": 50.0,
-        "REQUIRED_SCORE": 3,
+        "REQUIRED_SCORE": 4,
         "REQUIRE_NO_NEW_EXTREME_5BARS": False,
     },
     "aggressive": {
@@ -70,7 +75,7 @@ ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
         "RSI_BUY_MAX": 75.0,
         "RSI_SELL_MIN": 25.0,
         "RSI_SELL_MAX": 55.0,
-        "REQUIRED_SCORE": 1,
+        "REQUIRED_SCORE": 3,
         "REQUIRE_NO_NEW_EXTREME_5BARS": False,
     },
     "active_m5": {
@@ -78,7 +83,7 @@ ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
         "RSI_BUY_MAX": 68.0,
         "RSI_SELL_MIN": 32.0,
         "RSI_SELL_MAX": 52.0,
-        "REQUIRED_SCORE": 2,
+        "REQUIRED_SCORE": 4,
         "REQUIRE_NO_NEW_EXTREME_5BARS": False,
         "TIMEFRAME": "M5",
         "EMA_FAST_PERIOD": 20,
@@ -139,6 +144,14 @@ FIELDS: dict[str, FieldSpec] = {
     "MAX_DAILY_LOSS_PERCENT": FieldSpec("MAX_DAILY_LOSS_PERCENT", float, min_value=0.0, max_value=100.0),
     "LOSS_STREAK_THRESHOLD": FieldSpec("LOSS_STREAK_THRESHOLD", int, min_value=1, max_value=20),
     "COOLDOWN_AFTER_LOSSES_MINUTES": FieldSpec("COOLDOWN_AFTER_LOSSES_MINUTES", int, min_value=0, max_value=1440),
+    "H1_EMA_FAST_PERIOD": FieldSpec("H1_EMA_FAST_PERIOD", int, min_value=1, max_value=500),
+    "H1_EMA_SLOW_PERIOD": FieldSpec("H1_EMA_SLOW_PERIOD", int, min_value=2, max_value=1000),
+    "H1_MIN_BARS": FieldSpec("H1_MIN_BARS", int, min_value=1, max_value=500),
+    "PULLBACK_LOOKBACK_BARS": FieldSpec("PULLBACK_LOOKBACK_BARS", int, min_value=1, max_value=200),
+    "PULLBACK_MIN_EXTENSION_ATR": FieldSpec("PULLBACK_MIN_EXTENSION_ATR", float, min_value=0.0, max_value=20.0),
+    "PULLBACK_MAX_DISTANCE_ATR": FieldSpec("PULLBACK_MAX_DISTANCE_ATR", float, min_value=0.0, max_value=20.0),
+    "SAME_DIRECTION_MIN_BARS": FieldSpec("SAME_DIRECTION_MIN_BARS", int, min_value=0, max_value=1000),
+    "REENTRY_MIN_ATR_MULT": FieldSpec("REENTRY_MIN_ATR_MULT", float, min_value=0.0, max_value=20.0),
     "ENTRY_STRICTNESS": FieldSpec("ENTRY_STRICTNESS", str, choices=tuple(ENTRY_STRICTNESS_PRESETS)),
     "ENABLE_ORDERS": FieldSpec("ENABLE_ORDERS", bool),
     "DEMO_ONLY": FieldSpec("DEMO_ONLY", bool),

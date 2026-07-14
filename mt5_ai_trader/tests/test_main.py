@@ -334,7 +334,9 @@ def test_run_once_blocks_order_when_risk_manager_denies(monkeypatch):
     monkeypatch.setattr(
         risk_manager,
         "check_entry_allowed",
-        lambda symbol, history_feed, account_feed: risk_manager.RiskCheckResult(False, "クールダウン中です(テスト)"),
+        lambda symbol, history_feed, account_feed, **kwargs: risk_manager.RiskCheckResult(
+            False, "クールダウン中です(テスト)"
+        ),
     )
 
     feed = _FakeFeed()
@@ -356,7 +358,7 @@ def test_run_once_submits_order_when_risk_manager_allows(monkeypatch):
     monkeypatch.setattr(
         risk_manager,
         "check_entry_allowed",
-        lambda symbol, history_feed, account_feed: risk_manager.RiskCheckResult(True),
+        lambda symbol, history_feed, account_feed, **kwargs: risk_manager.RiskCheckResult(True),
     )
 
     feed = _FakeFeed()
@@ -378,7 +380,8 @@ def test_run_once_does_not_call_risk_manager_for_wait_signal(monkeypatch):
     monkeypatch.setattr(
         risk_manager,
         "check_entry_allowed",
-        lambda symbol, history_feed, account_feed: calls.append(symbol) or risk_manager.RiskCheckResult(True),
+        lambda symbol, history_feed, account_feed, **kwargs: calls.append(symbol)
+        or risk_manager.RiskCheckResult(True),
     )
 
     feed = _FakeFeed()

@@ -147,6 +147,12 @@ export interface RealAiStatus {
   symbol: string;
   timeframe: string;
   updated_at: number; // unix seconds
+  // 勝率優先ロジック(RuleBasedAIEngine)の加点スコア。null=LLM系エンジン等、
+  // スコアリング方式を使わない判断エンジンの場合。
+  score: number | null;
+  required_score: number | null;
+  // 必須条件が未達だった場合の、方向ごとの弾かれた条件名一覧。
+  failed_required: { BUY: string[]; SELL: string[] } | null;
 }
 
 // --- 実際にPython側(trade_history_feed.py経由でEAが書き出すJSON)から

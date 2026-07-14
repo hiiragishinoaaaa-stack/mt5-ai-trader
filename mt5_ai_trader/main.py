@@ -166,7 +166,15 @@ def _run_symbol_cycle(
                 atr_price = float(latest_atr)
 
         if signal.action in ("BUY", "SELL"):
-            risk_check = risk_manager.check_entry_allowed(symbol, history_feed, account_feed)
+            current_price = snapshot.tick.ask if signal.action == "BUY" else snapshot.tick.bid
+            risk_check = risk_manager.check_entry_allowed(
+                symbol,
+                history_feed,
+                account_feed,
+                direction=signal.action,
+                current_price=current_price,
+                atr_price=atr_price,
+            )
             if not risk_check.allowed:
                 signal = Signal(
                     "WAIT",

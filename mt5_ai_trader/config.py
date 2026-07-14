@@ -306,6 +306,57 @@ MAX_SPREAD_POINTS = _env_float("MAX_SPREAD_POINTS", 30.0)
 # 0以下で無効。
 ATR_MIN_POINTS = _env_float("ATR_MIN_POINTS", 0.0)
 
+# --- 上位足(H1)トレンドフィルター(RuleBasedAIEngine、勝率優先ロジック) ---
+# 取引時間足(例: M15)のローソク足をH1へリサンプルしてEMA20/50を計算し、
+# H1_EMA_FAST_PERIOD(EMA20)がH1_EMA_SLOW_PERIOD(EMA50)より上ならBUYのみ、
+# 下ならSELLのみを許可する必須条件。上位足でのトレンドと逆方向の
+# エントリーを防ぐ(下降トレンド中のBUY・上昇トレンド中のSELLを排除)。
+# H1_MIN_BARS未満しかリサンプルできない場合(データ不足)はフィルター自体を
+# 判定不能として素通しする(安全側に倒しすぎて何も取引できなくなるのを
+# 避けるため)。詳細はai_engine.RuleBasedAIEngineを参照。
+H1_EMA_FAST_PERIOD = _env_int("H1_EMA_FAST_PERIOD", 20)
+H1_EMA_SLOW_PERIOD = _env_int("H1_EMA_SLOW_PERIOD", 50)
+H1_MIN_BARS = _env_int("H1_MIN_BARS", 10)
+
+# --- 押し目/戻り待ちエントリー(RuleBasedAIEngine、勝率優先ロジック) ---
+# EMA(短期)とのクロスだけでなく、「直近PULLBACK_LOOKBACK_BARS本の間に
+# 価格がEMA(短期)からPULLBACK_MIN_EXTENSION_ATR×ATR以上離れたことがあり
+# (トレンド方向への値動きが十分あった)、かつ現在はEMA(短期)から
+# PULLBACK_MAX_DISTANCE_ATR×ATR以内まで戻っている(押し目/戻りが完了した)」
+# ことを必須条件にする。トレンドの初動を追いかけて高値掴み/安値売りする
+# のを防ぐ。ATRが計算できない場合はこの条件を満たさない扱いとする
+# (勝率優先の方針のため、判定不能を素通しではなくWAIT側に倒す)。
+PULLBACK_LOOKBACK_BARS = _env_int("PULLBACK_LOOKBACK_BARS", 8)
+PULLBACK_MIN_EXTENSION_ATR = _env_float("PULLBACK_MIN_EXTENSION_ATR", 0.5)
+PULLBACK_MAX_DISTANCE_ATR = _env_float("PULLBACK_MAX_DISTANCE_ATR", 0.3)
+
+# --- 再エントリー制御(risk_manager.py、勝率優先ロジック) ---
+# 同方向の連続エントリーは、直近の同方向エントリーからSAME_DIRECTION_MIN_BARS
+# 本分(TIMEFRAME換算の秒数)経過するまで禁止する。0で無効。
+SAME_DIRECTION_MIN_BARS = _env_int("SAME_DIRECTION_MIN_BARS", 2)
+# 直近のエントリー価格(方向を問わない)からREENTRY_MIN_ATR_MULT×ATR以内の
+# 価格帯での再エントリーを禁止する(同じ価格帯への往復エントリーを防ぐ)。
+# 0以下で無効。
+REENTRY_MIN_ATR_MULT = _env_float("REENTRY_MIN_ATR_MULT", 0.5)
+
+# TIMEFRAME文字列(M1/M5/M15/M30/H1/H4/D1)を1本あたりの秒数へ変換する。
+# SAME_DIRECTION_MIN_BARSを秒数に換算する際に使う(risk_manager.py参照)。
+TIMEFRAME_SECONDS: dict[str, int] = {
+    "M1": 60,
+    "M5": 300,
+    "M15": 900,
+    "M30": 1800,
+    "H1": 3600,
+    "H4": 14400,
+    "D1": 86400,
+}
+
+
+def timeframe_seconds(timeframe: str) -> int:
+    """TIMEFRAME文字列を1本あたりの秒数へ変換する。未知の値はM15(900秒)扱い。"""
+    return TIMEFRAME_SECONDS.get(timeframe, 900)
+
+
 # --- SL/TP方式(order_executor.py) ---
 # fixed: 従来通りSL_POINTS/TP_POINTS固定。atr: ATR(14)×倍率で毎回動的に計算。
 STOP_MODE = os.getenv("STOP_MODE", "fixed")
