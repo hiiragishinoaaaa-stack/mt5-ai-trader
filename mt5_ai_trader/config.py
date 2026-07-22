@@ -276,6 +276,9 @@ MACD_FAST_PERIOD = _env_int("MACD_FAST_PERIOD", 12)
 MACD_SLOW_PERIOD = _env_int("MACD_SLOW_PERIOD", 26)
 MACD_SIGNAL_PERIOD = _env_int("MACD_SIGNAL_PERIOD", 9)
 ATR_PERIOD = _env_int("ATR_PERIOD", 14)
+# ADX(トレンド強度、診断用。まだ売買判断には使っていない)。一般的に
+# 25以上でトレンド相場、20未満でレンジ相場とされる。
+ADX_PERIOD = _env_int("ADX_PERIOD", 14)
 
 # --- エントリー条件のスコアリング方式(RuleBasedAIEngine) ---
 # 「必須条件」(全て満たす必要がある)と「加点条件」(REQUIRED_SCORE点以上で

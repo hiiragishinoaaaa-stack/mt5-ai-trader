@@ -49,3 +49,47 @@ def test_add_indicators_requires_close_column():
         assert False, "ValueErrorが送出されるべき"
     except ValueError:
         pass
+
+
+def _trending_ohlc(n: int = 60) -> pd.DataFrame:
+    """一方向に強く上昇し続ける(高値安値の幅は小さい)、明確なトレンド相場のOHLC。"""
+    close = 150.0 + np.arange(n, dtype=float) * 0.3
+    return pd.DataFrame({"close": close, "high": close + 0.05, "low": close - 0.05})
+
+
+def _ranging_ohlc(n: int = 60) -> pd.DataFrame:
+    """一定の範囲内を行ったり来たりする、方向感の無いレンジ相場のOHLC。"""
+    close = 150.0 + np.sin(np.arange(n) * 0.5) * 0.3
+    return pd.DataFrame({"close": close, "high": close + 0.05, "low": close - 0.05})
+
+
+def test_adx_length_matches_input():
+    df = _trending_ohlc()
+    result = indicators.adx(df, period=14)
+    assert len(result) == len(df)
+
+
+def test_adx_within_bounds():
+    df = _trending_ohlc()
+    result = indicators.adx(df, period=14)
+    valid = result.dropna()
+    assert (valid >= 0).all()
+    assert (valid <= 100).all()
+
+
+def test_adx_higher_for_strong_trend_than_range():
+    trending = indicators.adx(_trending_ohlc(), period=14).iloc[-1]
+    ranging = indicators.adx(_ranging_ohlc(), period=14).iloc[-1]
+    assert trending > ranging
+
+
+def test_add_indicators_adds_adx_when_high_low_present():
+    result = indicators.add_indicators(_trending_ohlc())
+    assert "adx" in result.columns
+    assert "atr" in result.columns
+
+
+def test_add_indicators_omits_adx_without_high_low():
+    df = pd.DataFrame({"close": _sample_close_series()})
+    result = indicators.add_indicators(df)
+    assert "adx" not in result.columns

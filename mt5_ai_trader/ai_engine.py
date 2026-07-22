@@ -112,6 +112,10 @@ class RuleBasedAIEngine(AIEngine):
         details: dict[str, Any] = {col: float(latest[col]) for col in required_cols}
         if "atr" in df.columns and not pd.isna(latest["atr"]):
             details["atr"] = float(latest["atr"])
+        if "adx" in df.columns and not pd.isna(latest["adx"]):
+            # 診断用(トレンド/レンジ相場の目安、一般に25以上でトレンド・
+            # 20未満でレンジ)。まだ売買判断の条件には使っていない。
+            details["adx"] = float(latest["adx"])
         if "spread" in df.columns and not pd.isna(latest["spread"]):
             details["spread"] = float(latest["spread"])
 

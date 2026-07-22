@@ -30,6 +30,7 @@ class AiStatusSnapshot:
     score: int | None = None
     required_score: int | None = None
     failed_required: dict[str, list[str]] | None = None
+    adx: float | None = None
 
 
 def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
@@ -43,6 +44,7 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
     signal.details(ai_engine.RuleBasedAIEngine参照)から取り出し、
     Dashboardが構造化して表示できるようにする。RuleBasedAIEngine以外
     (LLM系エンジン等)ではdetailsに含まれないため、その場合はnull。
+    adxも同様(診断用。売買判断にはまだ使っていない、ai_engine.py参照)。
     """
     payload = {
         "action": signal.action,
@@ -54,6 +56,7 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
         "score": signal.details.get("score"),
         "required_score": signal.details.get("required_score"),
         "failed_required": signal.details.get("failed_required") or None,
+        "adx": signal.details.get("adx"),
     }
     file_path = config.ai_status_file_path(symbol)
     tmp_path = file_path.with_suffix(".tmp")
@@ -105,6 +108,7 @@ def read_status(symbol: str, max_staleness_seconds: float | None = None) -> AiSt
             score=payload.get("score"),
             required_score=payload.get("required_score"),
             failed_required=payload.get("failed_required"),
+            adx=payload.get("adx"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise AiStatusError(f"AI判断ファイルの形式が不正です: {exc}") from exc
