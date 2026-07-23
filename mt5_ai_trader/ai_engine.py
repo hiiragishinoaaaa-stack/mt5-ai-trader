@@ -98,6 +98,10 @@ class RuleBasedAIEngine(AIEngine):
     12. MACDヒストグラムが前足よりその方向へ拡大している(勢いの加速)
     13. (REQUIRE_NO_NEW_EXTREME_5BARS有効時のみ)直近5本(最新を除く)の
         安値(BUY)/高値(SELL)を更新していない
+    14. (REQUIRE_TRENDING_REGIME有効時のみ、既定は無効。_regime参照)
+        ADXがADX_TREND_THRESHOLD以上(トレンド相場)。BUY/SELL共通の条件
+        (方向を問わずレンジ相場での往復エントリーを抑制する狙い。ADX未計算
+        時はスコア対象外。バックテスト未検証のため既定は無効のまま)
 
     スプレッド(spread <= MAX_SPREAD_POINTS)だけは従来通りスコアに含めず、
     不合格なら即WAITを返す事前ゲートのまま。
@@ -121,10 +125,13 @@ class RuleBasedAIEngine(AIEngine):
         details: dict[str, Any] = {col: float(latest[col]) for col in required_cols}
         if "atr" in df.columns and not pd.isna(latest["atr"]):
             details["atr"] = float(latest["atr"])
-        if "adx" in df.columns and not pd.isna(latest["adx"]):
-            # 診断用(トレンド/レンジ相場の目安、一般に25以上でトレンド・
-            # 20未満でレンジ)。まだ売買判断の条件には使っていない。
+        regime = self._regime(latest)
+        if regime is not None:
+            # トレンド/レンジ相場の目安(ADX_TREND_THRESHOLD以上でTRENDING、
+            # 未満でRANGING)。REQUIRE_TRENDING_REGIME=false(既定)なら
+            # 診断表示のみで売買判断には影響しない(_score_conditions参照)。
             details["adx"] = float(latest["adx"])
+            details["regime"] = regime
         if "spread" in df.columns and not pd.isna(latest["spread"]):
             details["spread"] = float(latest["spread"])
 
@@ -190,6 +197,16 @@ class RuleBasedAIEngine(AIEngine):
             return True  # ATRが計算できない場合はチェックしない
         atr_points = float(latest["atr"]) / config.POINT_SIZE
         return atr_points >= config.ATR_MIN_POINTS
+
+    def _regime(self, latest: pd.Series) -> str | None:
+        """ADXからトレンド/レンジ相場を判定する。
+
+        ADXが未計算(high/low列が無い等)の場合はNone(判定不能、診断表示
+        なし・_score_conditionsでもスコア対象外)。
+        """
+        if "adx" not in latest or pd.isna(latest.get("adx")):
+            return None
+        return "TRENDING" if float(latest["adx"]) >= config.ADX_TREND_THRESHOLD else "RANGING"
 
     def _macd_expanding(self, df: pd.DataFrame) -> str | None:
         """MACDヒストグラムが前足よりどちら方向へ拡大しているか。
@@ -341,6 +358,13 @@ class RuleBasedAIEngine(AIEngine):
             no_new_low, no_new_high = self._no_new_extreme_5bars(df)
             label = "直近5本の安値を更新せず" if is_buy else "直近5本の高値を更新せず"
             conditions.append((label, no_new_low if is_buy else no_new_high))
+
+        # レジーム判定(ADX)は判定不能(ADX未計算)ならスコア対象から除外する。
+        # REQUIRE_TRENDING_REGIME=false(既定)なら追加しない(診断表示のみ)。
+        if config.REQUIRE_TRENDING_REGIME:
+            regime = self._regime(latest)
+            if regime is not None:
+                conditions.append(("トレンド相場(ADX)", regime == "TRENDING"))
 
         # H1関連の2条件は判定不能(データ不足)ならスコア対象から除外する。
         if h1_direction is not None:

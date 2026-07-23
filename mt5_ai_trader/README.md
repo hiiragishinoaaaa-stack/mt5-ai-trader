@@ -942,6 +942,31 @@ ANDだけで約1.6%まで低下する)構造上の問題があり、実際に何
   直接コントロールできるようになり、以前のように「どの条件を必須/加点に
   分類するか」を個別に設計し直す必要がなくなった。
 
+## ADXベースのレジーム判定(オプション、Phase 16)
+
+`indicators.add_indicators()`が計算するADX(トレンド強度、既に`ai_status`で
+診断表示のみに使われていた)を使い、`ai_engine.RuleBasedAIEngine`が
+相場をTRENDING(ADX_TREND_THRESHOLD以上)/RANGING(未満)に分類できるように
+した(`_regime()`)。ARTEMIS(トレンドフォロー的な判断条件が中心)も
+Phantom(グリッド/往復売買寄りのロジック)も、レンジ相場での方向感のない
+往復エントリーで勝率が落ちるという同じ課題を抱えているため、両プロジェクト
+共通の考え方として「レジームをまず判定し、それに応じて戦略/条件を切り替える」
+という設計にした(Phantom側は別リポジトリのため、同じ考え方をPhantomの
+グリッド有効化条件へ実装するのは別タスク)。
+
+- 既定(`REQUIRE_TRENDING_REGIME=false`)では**診断表示のみ**で売買判断には
+  一切影響しない(`ai_status`の`details.regime`/`details.adx`に出るだけ)。
+  ADX_PERIOD本未満などでADXが未計算の場合は`regime`自体が出ない。
+- `REQUIRE_TRENDING_REGIME=true`にすると、統一スコア方式(Phase 15)の
+  判断条件にもう1つ、「ADXが`ADX_TREND_THRESHOLD`(既定25.0)以上」が
+  BUY/SELL共通(方向を問わない)の1点として加わる(満点も+1)。ADXが
+  未計算の場合はこの条件自体がスコア対象から除外される(判定不能を
+  ペナルティにしない、他の条件と同じ扱い)。
+- MT5側にバックテスト基盤がまだ無いため、実際に勝率へどう効くかは未検証。
+  既定は無効のままにしており、有効化はDashboardのSettings画面
+  (「AI判断ロジック」内の`Require Trending Regime`トグル・
+  `ADX Trend Threshold`)から任意に試せる。
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

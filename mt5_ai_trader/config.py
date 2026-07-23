@@ -276,9 +276,16 @@ MACD_FAST_PERIOD = _env_int("MACD_FAST_PERIOD", 12)
 MACD_SLOW_PERIOD = _env_int("MACD_SLOW_PERIOD", 26)
 MACD_SIGNAL_PERIOD = _env_int("MACD_SIGNAL_PERIOD", 9)
 ATR_PERIOD = _env_int("ATR_PERIOD", 14)
-# ADX(トレンド強度、診断用。まだ売買判断には使っていない)。一般的に
-# 25以上でトレンド相場、20未満でレンジ相場とされる。
+# ADX(トレンド強度)。一般的に25以上でトレンド相場、20未満でレンジ相場
+# とされる。既定では診断表示のみ(ai_status/Dashboard)に使い、売買判断には
+# 影響しない。REQUIRE_TRENDING_REGIME=trueにすると、判断条件の1つとして
+# ADX>=ADX_TREND_THRESHOLDかどうかもBUY/SELL共通のスコアへ加算される
+# (ai_engine.RuleBasedAIEngine._regime参照。レンジ相場でのグリッド/
+# 逆張り的な往復エントリーを抑制する狙い。バックテスト未検証のため既定は
+# 無効)。
 ADX_PERIOD = _env_int("ADX_PERIOD", 14)
+ADX_TREND_THRESHOLD = _env_float("ADX_TREND_THRESHOLD", 25.0)
+REQUIRE_TRENDING_REGIME = _env_bool("REQUIRE_TRENDING_REGIME", False)
 
 # --- エントリー条件のスコアリング方式(RuleBasedAIEngine) ---
 # 各判断条件を1点ずつ均等に採点し、方向ごとの合計がREQUIRED_SCORE以上なら

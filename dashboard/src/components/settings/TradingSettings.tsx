@@ -281,6 +281,20 @@ export function TradingSettings() {
             ? " 現在のプリセットでは、直近5本の安値/高値を更新していないことも条件の1つに追加されている(満点も+1)。"
             : ""}
         </span>
+        <ToggleRow
+          label="Require Trending Regime"
+          description="ONにすると、ADXがADX Trend Threshold以上(トレンド相場)であることも判断条件の1つに加わる(BUY/SELL共通、満点も+1)。バックテスト未検証のため既定OFF"
+          checked={draft.REQUIRE_TRENDING_REGIME}
+          onChange={(v) => updateDraft({ REQUIRE_TRENDING_REGIME: v })}
+        />
+        <NumberField
+          label="ADX Trend Threshold"
+          step={1}
+          value={draft.ADX_TREND_THRESHOLD}
+          onChange={(v) => updateDraft({ ADX_TREND_THRESHOLD: v })}
+          error={errors.ADX_TREND_THRESHOLD}
+          disabled={saving || !draft.REQUIRE_TRENDING_REGIME}
+        />
         <div className="grid grid-cols-2 gap-x-3">
           <NumberField
             label="Max Spread"

@@ -37,6 +37,7 @@ export const NUMERIC_RANGES: Record<string, FieldRange> = {
   RSI_SELL_MIN: { min: 0, max: 100 },
   RSI_SELL_MAX: { min: 0, max: 100 },
   REQUIRED_SCORE: { min: 0, max: 13 },
+  ADX_TREND_THRESHOLD: { min: 0, max: 100 },
   MAX_SPREAD_POINTS: { min: 0, max: 100_000 },
   ATR_MIN_POINTS: { min: 0, max: 100_000 },
   ATR_SL_MULTIPLIER: { min: 0.1, max: 20 },

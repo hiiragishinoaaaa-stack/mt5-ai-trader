@@ -84,6 +84,8 @@ export interface TradingSettings {
   RSI_SELL_MAX: number;
   REQUIRED_SCORE: number;
   REQUIRE_NO_NEW_EXTREME_5BARS: boolean;
+  ADX_TREND_THRESHOLD: number;
+  REQUIRE_TRENDING_REGIME: boolean;
   MAX_SPREAD_POINTS: number;
   ATR_MIN_POINTS: number;
   POINT_SIZE: number;

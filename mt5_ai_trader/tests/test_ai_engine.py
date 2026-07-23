@@ -244,6 +244,58 @@ def test_decide_missing_pullback_lowers_score_without_hard_blocking():
     assert "押し目からの回復" in signal_strict.details["failed_required"]["BUY"]
 
 
+def test_decide_regime_is_diagnostic_only_by_default():
+    """REQUIRE_TRENDING_REGIME=false(既定)なら、ADXがどんな値でもスコアに
+    影響しない(details['regime']は表示されるが、条件としては加算されない)。
+    """
+    rows = _bullish_setup_rows()
+    df = pd.DataFrame(rows)
+    df["adx"] = 5.0  # 明確なレンジ相場
+    engine = RuleBasedAIEngine()
+    signal = engine.decide(df)
+    assert signal.action == "BUY"
+    assert signal.details["score"] == 10  # レジーム条件は未加算のまま満点
+    assert signal.details["regime"] == "RANGING"
+
+
+def test_decide_require_trending_regime_adds_scored_condition(monkeypatch):
+    """REQUIRE_TRENDING_REGIME=true時、ADX>=ADX_TREND_THRESHOLDならBUY/SELL
+    共通で1点加算され、未満なら満点が1点増えたうえでその1点を落とす。
+    """
+    monkeypatch.setattr(config, "REQUIRE_TRENDING_REGIME", True)
+    monkeypatch.setattr(config, "ADX_TREND_THRESHOLD", 25.0)
+    rows = _bullish_setup_rows()
+
+    df_trending = pd.DataFrame(rows)
+    df_trending["adx"] = 30.0
+    engine = RuleBasedAIEngine()
+    signal_trending = engine.decide(df_trending)
+    assert signal_trending.action == "BUY"
+    assert signal_trending.details["score"] == 11
+    assert signal_trending.details["regime"] == "TRENDING"
+
+    df_ranging = pd.DataFrame(rows)
+    df_ranging["adx"] = 10.0
+    signal_ranging = engine.decide(df_ranging)
+    assert signal_ranging.action == "BUY"  # 1点減っても他条件でカバーされる
+    assert signal_ranging.details["score"] == 10
+    assert signal_ranging.details["regime"] == "RANGING"
+
+
+def test_decide_require_trending_regime_without_adx_is_skipped(monkeypatch):
+    """ADX列が無い(high/lowが未提供等)場合、REQUIRE_TRENDING_REGIME=true
+    でもレジーム条件はスコア対象外になる(判定不能をペナルティにしない)。
+    """
+    monkeypatch.setattr(config, "REQUIRE_TRENDING_REGIME", True)
+    rows = _bullish_setup_rows()
+    df = pd.DataFrame(rows)  # adx列なし
+    engine = RuleBasedAIEngine()
+    signal = engine.decide(df)
+    assert signal.action == "BUY"
+    assert signal.details["score"] == 10
+    assert signal.details.get("regime") is None
+
+
 def test_decide_scores_but_does_not_block_when_macd_not_expanding():
     """MACDヒストグラムの拡大(勢いの加速)は他条件と同様の1点条件であり、
     方向自体さえ合っていれば拡大していなくてもエントリーはブロックされない

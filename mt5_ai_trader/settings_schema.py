@@ -134,6 +134,8 @@ FIELDS: dict[str, FieldSpec] = {
     "RSI_SELL_MAX": FieldSpec("RSI_SELL_MAX", float, min_value=0.0, max_value=100.0),
     "REQUIRED_SCORE": FieldSpec("REQUIRED_SCORE", int, min_value=0, max_value=13),
     "REQUIRE_NO_NEW_EXTREME_5BARS": FieldSpec("REQUIRE_NO_NEW_EXTREME_5BARS", bool),
+    "ADX_TREND_THRESHOLD": FieldSpec("ADX_TREND_THRESHOLD", float, min_value=0.0, max_value=100.0),
+    "REQUIRE_TRENDING_REGIME": FieldSpec("REQUIRE_TRENDING_REGIME", bool),
     "POINT_SIZE": FieldSpec("POINT_SIZE", float, min_value=0.000001, max_value=10.0),
     "MAX_SPREAD_POINTS": FieldSpec("MAX_SPREAD_POINTS", float, min_value=0.0, max_value=100_000.0),
     "ATR_MIN_POINTS": FieldSpec("ATR_MIN_POINTS", float, min_value=0.0, max_value=100_000.0),
