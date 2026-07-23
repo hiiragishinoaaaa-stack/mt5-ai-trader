@@ -186,7 +186,7 @@ export function TradingSettings() {
           />
           <span className="text-xs text-ink-faint">
             {ENTRY_STRICTNESS_PRESETS[draft.ENTRY_STRICTNESS].description}
-            (選択すると下の必須条件・必要スコアも自動更新されます。その後個別に調整できます)
+            (選択すると下のRSI帯域・必要スコアも自動更新されます。その後個別に調整できます)
           </span>
         </div>
         <div className="grid grid-cols-2 gap-x-3">
@@ -226,8 +226,8 @@ export function TradingSettings() {
           />
         </div>
         <span className="-mt-1 pb-2 text-xs text-ink-faint">
-          BUY/SELLそれぞれの必須条件として、RSIがこの範囲内にあることを要求する(EMAトレンド・スプレッド・ATR等の
-          他の必須条件と合わせて全て満たす必要がある)。
+          BUY/SELLそれぞれの判断条件の1つとして、RSIがこの範囲内にあるかを1点で採点する(EMAトレンド・MACD方向等の
+          他の条件と合算した合計スコアがRequired Score以上ならエントリー)。
         </span>
         <div className="grid grid-cols-2 gap-x-3">
           <NumberField
@@ -268,16 +268,17 @@ export function TradingSettings() {
         <NumberField
           label="Required Score"
           step={1}
-          suffix="/5点"
+          suffix="点"
           value={draft.REQUIRED_SCORE}
           onChange={(v) => updateDraft({ REQUIRED_SCORE: v })}
           error={errors.REQUIRED_SCORE}
           disabled={saving}
         />
         <span className="-mt-1 pb-2 text-xs text-ink-faint">
-          必須条件を全て満たした上で、MACD方向・EMA傾き等の加点条件(最大5点)がこの点数以上ならエントリー候補になる。
+          EMAトレンド・押し目・RSI帯域・MACD方向等、判断条件(方向ごとに約9〜13点満点、データ不足で判定不能な条件は
+          満点からも除外される)を1点ずつ均等に採点し、合計がこの点数以上ならエントリーする。
           {draft.REQUIRE_NO_NEW_EXTREME_5BARS
-            ? " 現在のプリセットでは、直近5本の安値/高値を更新していないことも必須条件に追加されている。"
+            ? " 現在のプリセットでは、直近5本の安値/高値を更新していないことも条件の1つに追加されている(満点も+1)。"
             : ""}
         </span>
         <div className="grid grid-cols-2 gap-x-3">

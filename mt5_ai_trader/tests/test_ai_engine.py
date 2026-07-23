@@ -25,7 +25,8 @@ def _patch_scoring_config(monkeypatch):
     monkeypatch.setattr(config, "RSI_BUY_MAX", 65.0)
     monkeypatch.setattr(config, "RSI_SELL_MIN", 35.0)
     monkeypatch.setattr(config, "RSI_SELL_MAX", 50.0)
-    monkeypatch.setattr(config, "REQUIRED_SCORE", 3)
+    # balancedプリセット相当(統一スコア方式、満点は条件数に応じて約9〜13点)。
+    monkeypatch.setattr(config, "REQUIRED_SCORE", 7)
     monkeypatch.setattr(config, "REQUIRE_NO_NEW_EXTREME_5BARS", False)
     monkeypatch.setattr(config, "MAX_SPREAD_POINTS", 30.0)
     monkeypatch.setattr(config, "ATR_MIN_POINTS", 0.0)
@@ -87,8 +88,9 @@ def test_decide_returns_buy_on_bullish_setup():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "BUY"
-    # H1データ(time列)が無いためH1加点は付かず、5/6点が上限。
-    assert signal.details["score"] == 5
+    # H1データ(time列)が無いためH1関連の2条件はスコア対象外。全条件を
+    # 満たす完璧なセットアップのため満点(10/10)になる。
+    assert signal.details["score"] == 10
 
 
 def test_decide_returns_sell_on_bearish_setup():
@@ -96,45 +98,44 @@ def test_decide_returns_sell_on_bearish_setup():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "SELL"
-    assert signal.details["score"] == 5
+    assert signal.details["score"] == 10
 
 
-def test_decide_returns_wait_when_required_conditions_not_met():
-    """上昇トレンドだがRSIが帯域外(SELL方向の判断材料が混在)なため必須条件が未達。"""
+def test_decide_returns_wait_when_score_far_below_threshold():
+    """上昇トレンドだがRSIが帯域外(SELL方向の判断材料が混在)で、BUY/SELL
+    どちらの方向も合計スコアがREQUIRED_SCORE(7)に遠く届かないケース。
+    """
     df = pd.DataFrame([_row(ema_fast=151.0, ema_slow=150.0, macd_hist=-0.5, rsi=90.0)])
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "WAIT"
-    assert "必須条件が未達" in signal.reason
+    assert signal.details["score"] == 3  # BUY: トレンド・ATR・RSI>50の3点のみ
+    assert "必要点数(7)未達" in signal.reason
 
 
-def test_decide_returns_wait_when_required_met_but_score_insufficient():
-    """必須条件(トレンド・H1・押し目・RSI・MACD方向一致)は満たすが、
-    加点条件(EMAの傾き・陽線・MACD拡大)が揃わないため必要スコアに
-    届かないケース。
-
-    _bullish_setup_rows()の最新足だけ、EMAの傾きを横ばい・実体を陰線・
-    MACDヒストグラムを縮小方向に変える(押し目・MACD方向一致等の必須条件は
-    そのまま満たす)。加点はRSI>50・3本安値切り上げの2点のみ(必要スコア
-    3点に届かない)。
+def test_decide_returns_wait_when_score_insufficient():
+    """トレンド・RSI帯域・MACD方向一致等は満たすが、EMAの傾き・陽線実体・
+    3本安値切り上げ・MACD拡大の4条件が揃わず、必要スコア(7)に届かない
+    ケース(_bullish_setup_rows()の最新足だけ差し替え、10点満点中6点)。
     """
     rows = _bullish_setup_rows()
     rows[-1] = _row(
         open=150.0,
-        close=149.65,
+        close=149.5,  # 陰線(陽線一致の条件を落とす)
         high=150.1,
-        low=149.3,
-        ema_fast=149.5,  # 前足(idx3)と同値=傾き横ばい(EMA傾き加点なし)
+        low=149.0,  # 前足(149.2)より安い=3本安値切り上げが崩れる
+        ema_fast=149.5,  # 前足(idx3)と同値=傾き横ばい(条件を落とす)
         ema_slow=148.0,
-        macd_hist=0.15,  # 前足(0.2)より縮小=方向一致は満たすが拡大加点はなし
+        macd_hist=0.15,  # 前足(0.2)より縮小=方向一致は満たすがMACD拡大は落ちる
         rsi=58.0,
     )
     df = pd.DataFrame(rows)
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "WAIT"
-    assert "加点不足" in signal.reason
+    assert signal.details["score"] == 6
     assert signal.details["score"] < signal.details["required_score"]
+    assert "必要点数(7)未達" in signal.reason
 
 
 def test_decide_returns_wait_on_empty_dataframe():
@@ -143,9 +144,13 @@ def test_decide_returns_wait_on_empty_dataframe():
     assert signal.action == "WAIT"
 
 
-def test_decide_conservative_extra_filter_blocks_new_low(monkeypatch):
-    """REQUIRE_NO_NEW_EXTREME_5BARS有効時、直近5本の安値を更新するとBUYが
-    ブロックされる(conservativeプリセット相当)。
+def test_decide_conservative_extra_filter_adds_condition_and_can_block(monkeypatch):
+    """REQUIRE_NO_NEW_EXTREME_5BARS有効時、直近5本の安値を更新する足は
+    「直近5本の安値を更新せず」条件が満点にも失敗リストにも1点追加される
+    (conservativeプリセット相当)。統一スコア方式では単独で即ブロックする
+    わけではなく、REQUIRED_SCOREを満点近くまで上げた場合にこの1点差が
+    WAITへ倒すことを確認する(新低値を作る足は直近3本安値切り上げ条件も
+    連動して失敗するため、あわせて2点減点になる)。
     """
     rows = _bullish_setup_rows()
     padding = [
@@ -156,15 +161,23 @@ def test_decide_conservative_extra_filter_blocks_new_low(monkeypatch):
     df.loc[df.index[-1], "low"] = 148.5  # 直近5本の最安値(149.0)を下回る
 
     monkeypatch.setattr(config, "REQUIRE_NO_NEW_EXTREME_5BARS", True)
+    monkeypatch.setattr(config, "REQUIRED_SCORE", 10)  # 満点(11)近くまで引き上げる
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
 
     assert signal.action == "WAIT"
+    assert signal.details["score"] == 9
+    assert "直近5本の安値を更新せず" in signal.details["failed_required"]["BUY"]
 
 
-def test_decide_blocks_buy_against_h1_downtrend(monkeypatch):
-    """取引時間足(M15)は上昇トレンドでも、上位足(H1)が下降トレンドの場合は
-    BUYが必須条件の時点でブロックされる(勝率優先ロジック②)。
+def test_decide_h1_downtrend_lowers_buy_score_without_hard_blocking(monkeypatch):
+    """取引時間足(M15)は上昇トレンドで、上位足(H1)が下降トレンドの場合、
+    H1関連の2条件(方向一致・EMA傾き一致)が失敗リストに入りBUYスコアが
+    下がる。統一スコア方式ではこれ単独でエントリーを即ブロックはしない
+    (通常のREQUIRED_SCORE(7)なら他の条件でカバーされBUYのまま)一方、
+    REQUIRED_SCOREを満点近くまで上げれば、この減点がWAITへ倒す材料になる
+    ことを確認する(2026-07に必須条件から通常のスコア条件へ変更。
+    ai_engine.pyのdocstring参照)。
     """
     monkeypatch.setattr(config, "H1_MIN_BARS", 3)
 
@@ -182,9 +195,8 @@ def test_decide_blocks_buy_against_h1_downtrend(monkeypatch):
         rows[idx]["close"] = hourly_close[bucket]
 
     # 直近の押し目ウィンドウ(idx13-15)のどこかでEMAから十分離れておき、
-    # 最新足(idx16)はローカルEMA近くまで戻す(H1以外の必須条件は全て
-    # 満たすようにして、H1フィルターだけが原因でブロックされることを
-    # 確認する)。
+    # 最新足(idx16)はローカルEMA近くまで戻す(H1以外はほぼ全条件を満たす
+    # ようにして、H1不一致による減点分だけを見る)。
     rows[15].update(ema_fast=148.5, macd_hist=0.2)  # dist=(149.5-148.5)/1.0=1.0 >= 0.5(拡張)
     rows[16].update(ema_fast=148.8, macd_hist=0.3, rsi=58.0)  # dist=(149.0-148.8)/1.0=0.2(押し目完了)
 
@@ -192,16 +204,23 @@ def test_decide_blocks_buy_against_h1_downtrend(monkeypatch):
     df["time"] = times
 
     engine = RuleBasedAIEngine()
-    signal = engine.decide(df)
+    signal_normal = engine.decide(df)
+    assert signal_normal.action == "BUY"  # 通常の必要点数(7)なら他条件でカバーされる
+    assert signal_normal.details.get("h1_ema_fast") is not None
+    assert signal_normal.details["score"] == 9
 
-    assert signal.action == "WAIT"
-    assert signal.details.get("h1_ema_fast") is not None
-    assert "上位足(H1)が上昇方向" in signal.details["failed_required"]["BUY"]
+    monkeypatch.setattr(config, "REQUIRED_SCORE", 10)
+    signal_strict = engine.decide(df)
+    assert signal_strict.action == "WAIT"
+    assert "上位足(H1)が方向一致" in signal_strict.details["failed_required"]["BUY"]
+    assert "上位足(H1)のEMAも方向一致" in signal_strict.details["failed_required"]["BUY"]
 
 
-def test_decide_blocks_entry_without_pullback():
+def test_decide_missing_pullback_lowers_score_without_hard_blocking():
     """EMAから十分離れたままで戻ってきていない(押し目が完了していない)
-    場合、トレンド・RSI・MACDが揃っていてもBUYは必須条件で弾かれる。
+    場合、「押し目からの回復」条件が1点減点される。統一スコア方式では
+    これ単独ではブロックしない(通常のREQUIRED_SCORE(7)ならBUYのまま)が、
+    REQUIRED_SCOREを満点近くまで上げればWAITへ倒す材料になる。
     """
     rows = _bullish_setup_rows()
     # 最新足を、押し目が完了する前(EMAからまだ離れたまま)に変更する。
@@ -211,20 +230,28 @@ def test_decide_blocks_entry_without_pullback():
     )  # dist=(150.5-149.7)/1.0=0.8 > PULLBACK_MAX_DISTANCE_ATR(0.3)
     df = pd.DataFrame(rows)
     engine = RuleBasedAIEngine()
-    signal = engine.decide(df)
-    assert signal.action == "WAIT"
-    assert "押し目からの回復" in signal.details["failed_required"]["BUY"]
+
+    signal_normal = engine.decide(df)
+    assert signal_normal.action == "BUY"
+    assert signal_normal.details["score"] == 9
+
+    config.REQUIRED_SCORE = 10
+    try:
+        signal_strict = engine.decide(df)
+    finally:
+        config.REQUIRED_SCORE = 7
+    assert signal_strict.action == "WAIT"
+    assert "押し目からの回復" in signal_strict.details["failed_required"]["BUY"]
 
 
-def test_decide_awards_bonus_but_does_not_block_when_macd_not_expanding():
-    """MACDヒストグラムの拡大(勢いの加速)は加点条件であり、方向自体さえ
-    合っていれば拡大していなくても必須条件はブロックされない(2026-07に
-    必須条件から加点条件へ格下げ。ai_engine.pyのdocstring参照)。拡大時より
-    加点が1点減るだけ。
+def test_decide_scores_but_does_not_block_when_macd_not_expanding():
+    """MACDヒストグラムの拡大(勢いの加速)は他条件と同様の1点条件であり、
+    方向自体さえ合っていれば拡大していなくてもエントリーはブロックされない
+    (拡大時より1点減るだけ)。
     """
     rows = _bullish_setup_rows()
     # 最新足のMACDヒストグラムを前足(0.2)より縮小させる(方向=+のままなので
-    # 必須条件「MACDヒストグラムが方向一致」は満たす)。
+    # 「MACDヒストグラムが方向一致」条件は満たす)。
     rows[-1] = _row(
         open=149.6, close=149.85, high=149.95, low=149.4,
         ema_fast=149.7, ema_slow=148.0, macd_hist=0.15, rsi=58.0,
@@ -233,8 +260,7 @@ def test_decide_awards_bonus_but_does_not_block_when_macd_not_expanding():
     engine = RuleBasedAIEngine()
     signal = engine.decide(df)
     assert signal.action == "BUY"
-    assert signal.details["score"] == 4  # フル5点からMACD拡大加点(-1)
-    assert "MACDヒストグラムが拡大方向" not in signal.details["bonus_reasons"]
+    assert signal.details["score"] == 9  # フル10点からMACD拡大分(-1)
 
 
 def test_get_ai_engine_returns_rule_based_by_default():

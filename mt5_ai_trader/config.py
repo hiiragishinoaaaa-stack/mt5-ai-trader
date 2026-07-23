@@ -281,19 +281,21 @@ ATR_PERIOD = _env_int("ATR_PERIOD", 14)
 ADX_PERIOD = _env_int("ADX_PERIOD", 14)
 
 # --- エントリー条件のスコアリング方式(RuleBasedAIEngine) ---
-# 「必須条件」(全て満たす必要がある)と「加点条件」(REQUIRED_SCORE点以上で
-# エントリー候補)に分けて判断する。RSI_BUY_MIN/MAX・RSI_SELL_MIN/MAX・
-# REQUIRED_SCORE・REQUIRE_NO_NEW_EXTREME_5BARSは、いずれもENTRY_STRICTNESS
-# プリセット(settings_schema.ENTRY_STRICTNESS_PRESETS)経由で一括設定される
-# ことを想定した値で、個別にも上書きできる。詳細はai_engine.RuleBasedAIEngine
+# 各判断条件を1点ずつ均等に採点し、方向ごとの合計がREQUIRED_SCORE以上なら
+# エントリーする閾値方式(2026-07に必須条件/加点条件の2段構えから統一)。
+# RSI_BUY_MIN/MAX・RSI_SELL_MIN/MAX・REQUIRED_SCORE・
+# REQUIRE_NO_NEW_EXTREME_5BARSは、いずれもENTRY_STRICTNESSプリセット
+# (settings_schema.ENTRY_STRICTNESS_PRESETS)経由で一括設定されることを
+# 想定した値で、個別にも上書きできる。詳細はai_engine.RuleBasedAIEngine
 # のdocstringを参照。
 RSI_BUY_MIN = _env_float("RSI_BUY_MIN", 50.0)
 RSI_BUY_MAX = _env_float("RSI_BUY_MAX", 65.0)
 RSI_SELL_MIN = _env_float("RSI_SELL_MIN", 35.0)
 RSI_SELL_MAX = _env_float("RSI_SELL_MAX", 50.0)
-# 必須条件を満たした上で、加点条件(5つ、各1点)が何点以上ならエントリー
-# 候補とするか。
-REQUIRED_SCORE = _env_int("REQUIRED_SCORE", 3)
+# 方向ごとの合計スコア(満点は条件数に応じて約9〜13点、データ不足で判定
+# 不能な条件は満点からも除外される)が何点以上ならエントリーとするか
+# (balancedプリセット相当の初期値。バックテスト未実施のため暫定値)。
+REQUIRED_SCORE = _env_int("REQUIRED_SCORE", 7)
 # 直近5本(最新を除く)の安値/高値を更新していないことを追加の必須条件に
 # するかどうか(取引回数を大きく減らすため、conservativeプリセットのみtrue)。
 REQUIRE_NO_NEW_EXTREME_5BARS = _env_bool("REQUIRE_NO_NEW_EXTREME_5BARS", False)

@@ -37,29 +37,32 @@ BOT_RUN_STATE_CHOICES = ("RUNNING", "STOPPED", "EMERGENCY_STOPPED")
 # された各キーがconfig.jsonへ上書きされる(payloadに同じキーが明示的に
 # 含まれていた場合はそちらを優先する。validate()を参照)。
 #
-# RuleBasedAIEngine(ai_engine.py)は「必須条件」(全て満たす必要がある)と
-# 「加点条件」(REQUIRED_SCORE点以上でエントリー候補)の2段階でBUY/SELLを
-# 判断する。RSI_BUY_MIN/MAX・RSI_SELL_MIN/MAX・REQUIRED_SCOREがこの判断の
+# RuleBasedAIEngine(ai_engine.py)は、判断条件(EMAトレンド・押し目・RSI帯域・
+# MACD方向・上位足フィルター等、方向ごとに約9〜13点満点、データ不足で判定
+# 不能な条件は満点からも除外される)を1点ずつ均等に採点し、方向ごとの合計が
+# REQUIRED_SCORE以上ならエントリーする単純な閾値方式(2026-07に必須条件/
+# 加点条件の2段構えから統一。詳細はai_engine.RuleBasedAIEngineのdocstring
+# 参照)。RSI_BUY_MIN/MAX・RSI_SELL_MIN/MAX・REQUIRED_SCOREがこの判断の
 # 主要パラメータで、プリセットが厳しくなるほどRSI帯域が狭く・必要スコアが
 # 高くなる。conservativeのみ、直近5本の安値/高値を更新していないことを
-# 追加の必須条件にする(REQUIRE_NO_NEW_EXTREME_5BARS)。
+# 追加の判断条件にする(REQUIRE_NO_NEW_EXTREME_5BARS、満点も+1される)。
 #
 # active_m5は上記に加えてTIMEFRAME/EMA期間/ATRベースSL・TP/エントリー
 # クールダウン/時間・日あたりの最大取引数もまとめて切り替える、USDJPY・M5
 # での積極運用を想定したプリセット(詳細はREADME.mdの「複数銘柄対応」の後、
 # 「M5アクティブ運用」セクションを参照)。
-# REQUIRED_SCOREは、勝率優先ロジック(RuleBasedAIEngine、H1トレンドフィルター・
-# 押し目待ち・MACD方向一致が必須条件化された後)のボーナス条件6点満点に
-# 対する必要点数(MACD拡大は2026-07にボーナス条件へ格下げ。ai_engine.py
-# 参照)。必須条件自体が以前よりずっと厳しくなっているため、各プリセットの
-# REQUIRED_SCOREも底上げしている(aggressiveでも以前のbalanced相当以上)。
+# 各プリセットのREQUIRED_SCOREは、実際の満点(データ有無で変動する)に対する
+# 目安の割合(conservative≈8割、balanced≈7割、aggressive≈5割、active_m5≈6割)
+# から暫定的に設定した値であり、MT5側にバックテスト基盤がまだ無いため実測で
+# 検証できていない(判断ベースの初期値。Dashboardから実際の約定頻度を見ながら
+# 調整すること)。
 ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
     "conservative": {
         "RSI_BUY_MIN": 52.0,
         "RSI_BUY_MAX": 62.0,
         "RSI_SELL_MIN": 38.0,
         "RSI_SELL_MAX": 48.0,
-        "REQUIRED_SCORE": 5,
+        "REQUIRED_SCORE": 9,
         "REQUIRE_NO_NEW_EXTREME_5BARS": True,
     },
     "balanced": {
@@ -67,7 +70,7 @@ ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
         "RSI_BUY_MAX": 65.0,
         "RSI_SELL_MIN": 35.0,
         "RSI_SELL_MAX": 50.0,
-        "REQUIRED_SCORE": 4,
+        "REQUIRED_SCORE": 7,
         "REQUIRE_NO_NEW_EXTREME_5BARS": False,
     },
     "aggressive": {
@@ -75,7 +78,7 @@ ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
         "RSI_BUY_MAX": 75.0,
         "RSI_SELL_MIN": 25.0,
         "RSI_SELL_MAX": 55.0,
-        "REQUIRED_SCORE": 3,
+        "REQUIRED_SCORE": 5,
         "REQUIRE_NO_NEW_EXTREME_5BARS": False,
     },
     "active_m5": {
@@ -83,7 +86,7 @@ ENTRY_STRICTNESS_PRESETS: dict[str, dict[str, Any]] = {
         "RSI_BUY_MAX": 68.0,
         "RSI_SELL_MIN": 32.0,
         "RSI_SELL_MAX": 52.0,
-        "REQUIRED_SCORE": 4,
+        "REQUIRED_SCORE": 6,
         "REQUIRE_NO_NEW_EXTREME_5BARS": False,
         "TIMEFRAME": "M5",
         "EMA_FAST_PERIOD": 20,
@@ -129,7 +132,7 @@ FIELDS: dict[str, FieldSpec] = {
     "RSI_BUY_MAX": FieldSpec("RSI_BUY_MAX", float, min_value=0.0, max_value=100.0),
     "RSI_SELL_MIN": FieldSpec("RSI_SELL_MIN", float, min_value=0.0, max_value=100.0),
     "RSI_SELL_MAX": FieldSpec("RSI_SELL_MAX", float, min_value=0.0, max_value=100.0),
-    "REQUIRED_SCORE": FieldSpec("REQUIRED_SCORE", int, min_value=0, max_value=6),
+    "REQUIRED_SCORE": FieldSpec("REQUIRED_SCORE", int, min_value=0, max_value=13),
     "REQUIRE_NO_NEW_EXTREME_5BARS": FieldSpec("REQUIRE_NO_NEW_EXTREME_5BARS", bool),
     "POINT_SIZE": FieldSpec("POINT_SIZE", float, min_value=0.000001, max_value=10.0),
     "MAX_SPREAD_POINTS": FieldSpec("MAX_SPREAD_POINTS", float, min_value=0.0, max_value=100_000.0),

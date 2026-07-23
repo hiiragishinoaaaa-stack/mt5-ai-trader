@@ -48,9 +48,6 @@ class AIEngine(ABC):
         raise NotImplementedError
 
 
-_BONUS_CONDITION_COUNT = 6
-
-
 class RuleBasedAIEngine(AIEngine):
     """必須条件(全て満たす必要がある) + 加点条件(2段階目のスコアリング)で
     BUY/SELL/WAITを判断するルールベースエンジン。「勝率優先」(取引回数より
@@ -63,40 +60,52 @@ class RuleBasedAIEngine(AIEngine):
     必要スコア・EMA/ATR期間・(conservativeのみ)直近5本の高安値フィルターが
     切り替わる。
 
-    ## 必須条件(BUY)
-    1. ema_fast > ema_slow(取引時間足での上昇トレンド)
+    ## スコア方式(2026-07に必須条件/加点条件の2段構えから統一、Fable5との
+    設計相談を踏まえた変更)
+
+    以前は「必須条件(全て満たさないと即WAIT)」と「加点条件(必須を満たした
+    上でさらにREQUIRED_SCORE点以上必要)」の2段構えだった。この設計だと
+    必須条件が1つでも欠けると、加点がどれだけ高くてもエントリーできず、
+    条件を1つ足すたびに発動機会が乗算的に減っていく(例えば各条件の通過率が
+    50%だとしても、必須条件6個のANDだけで約1.6%まで低下する)。
+    実際にこれが原因で、何日も一度もエントリーが発生しない状態が続いた。
+
+    そこで、スプレッド判定(ブローカー都合のデータ品質チェックであり、相場の
+    判断材料ではないため据え置き)を除く全ての判断条件を1点ずつの均等な
+    スコアとして扱い、方向(BUY/SELL)ごとの合計スコアがREQUIRED_SCORE以上に
+    なったらエントリーする、単純な閾値方式に統一した。閾値NをDashboardから
+    調整するだけで発動頻度と厳しさのバランスを直接コントロールできる
+    (以前のように「どの条件を必須/加点に分類するか」を個別に設計し直す
+    必要がない)。
+
+    ## 判断条件(方向ごとに1点ずつ、_score_conditions参照)
+
+    1. ema_fast > ema_slow(取引時間足でのトレンド方向)
     2. 上位足(H1)フィルター: H1のEMA(H1_EMA_FAST_PERIOD)がEMA
-       (H1_EMA_SLOW_PERIOD)より上(H1データ不足で判定不能な場合は素通し)。
-       下降トレンド中はこの時点でBUYが必ず弾かれる。
+       (H1_EMA_SLOW_PERIOD)より方向側(H1データ不足で判定不能な場合は
+       0点、ペナルティにはしないが加点もしない)
     3. 押し目からの回復(_pullback_ok参照): 直近PULLBACK_LOOKBACK_BARS本の
        間にEMA(短期)からPULLBACK_MIN_EXTENSION_ATR×ATR以上離れたことが
        あり、現在はPULLBACK_MAX_DISTANCE_ATR×ATR以内まで戻っている
-       (EMAとの単純クロスだけでなく、値動きが十分あった上での押し目待ちに
-       する)
-    4. RSI_BUY_MIN <= rsi <= RSI_BUY_MAX(過熱・売られすぎの両端を除外)
-    5. spread <= MAX_SPREAD_POINTS(MAX_SPREAD_POINTS<=0なら無効)
-    6. ATR(points換算) >= ATR_MIN_POINTS(ATR_MIN_POINTS<=0なら無効。
-       値動きが小さすぎるレンジ相場での無駄なエントリーを防ぐ)
-    7. MACDヒストグラムが方向と一致(>0)
-    8. (REQUIRE_NO_NEW_EXTREME_5BARS有効時のみ)直近5本(最新を除く)の
-       安値を更新していない
-    SELLはBUYの左右対称(EMA/RSI/高安値・H1・押し目の向きが逆)。
+    4. RSI_BUY_MIN <= rsi <= RSI_BUY_MAX(SELLはRSI_SELL_MIN/MAX)
+    5. ATR(points換算) >= ATR_MIN_POINTS(ATR_MIN_POINTS<=0なら常に満たす)
+    6. MACDヒストグラムが方向と一致(BUYなら>0、SELLなら<0)
+    7. EMA(短期)の傾きが方向と一致(前足より上/下)
+    8. 直近ローソク足の実体が方向と一致(陽線/陰線)
+    9. 直近3本の安値(BUY)/高値(SELL)がその方向へ切り上がって/切り下がっている
+    10. RSIが50を方向側へ超えている(モメンタム確認)
+    11. 上位足(H1)のEMA(短期)自体も方向に傾いている(H1判定不能時は0点)
+    12. MACDヒストグラムが前足よりその方向へ拡大している(勢いの加速)
+    13. (REQUIRE_NO_NEW_EXTREME_5BARS有効時のみ)直近5本(最新を除く)の
+        安値(BUY)/高値(SELL)を更新していない
 
-    「MACDヒストグラムが前足よりその方向へ拡大しているか」はかつて必須条件
-    だったが、M15では同時に成立する瞬間が稀すぎてエントリー機会が
-    極端に減ってしまったため、加点条件へ格下げした(2026-07)。
+    スプレッド(spread <= MAX_SPREAD_POINTS)だけは従来通りスコアに含めず、
+    不合格なら即WAITを返す事前ゲートのまま。
 
-    ## 加点条件(各1点、最大6点)
-    1. EMA(短期)の傾きが方向と一致(前足より上/下)
-    2. 直近ローソク足の実体が方向と一致(陽線/陰線)
-    3. 直近3本の安値(BUY)/高値(SELL)がその方向へ切り上がって/切り下がっている
-    4. RSIが50を方向側へ超えている(BUYなら>50、SELLなら<50。モメンタム確認)
-    5. 上位足(H1)のEMA(短期)自体も方向に傾いている(H1判定不能時は付与しない)
-    6. MACDヒストグラムが前足よりその方向へ拡大している(勢いの加速を確認)
-
-    必須条件を全て満たし、加点スコアがREQUIRED_SCORE以上ならBUY/SELL、
-    そうでなければWAITを返す。details には score/required_score/
-    bonus_reasons/failed_required等を構造化して格納する(Dashboard表示用)。
+    合計スコアがREQUIRED_SCORE以上の方向があればその方向でエントリー(両方
+    到達した場合はスコアが高い方、同点ならBUY優先)。無ければWAIT。
+    details には score/required_score/failed_required等を構造化して
+    格納する(Dashboard表示用)。
     """
 
     def decide(self, df: pd.DataFrame) -> Signal:
@@ -119,79 +128,52 @@ class RuleBasedAIEngine(AIEngine):
         if "spread" in df.columns and not pd.isna(latest["spread"]):
             details["spread"] = float(latest["spread"])
 
-        spread_ok = self._spread_ok(latest)
+        if not self._spread_ok(latest):
+            details.update(score=0, required_score=config.REQUIRED_SCORE, failed_required=None)
+            spread_val = details.get("spread")
+            return Signal(
+                "WAIT", f"スプレッドが広すぎます({spread_val}pt > {config.MAX_SPREAD_POINTS}pt)", details
+            )
+
         atr_ok = self._atr_ok(latest)
         h1_direction, h1_details = self._h1_trend_direction(df)
         details.update(h1_details)
         macd_expanding = self._macd_expanding(df)
 
-        buy_required = {
-            "上昇トレンド(EMA)": latest["ema_fast"] > latest["ema_slow"],
-            "上位足(H1)が上昇方向": h1_direction in (None, "BUY"),
-            "押し目からの回復": self._pullback_ok(df, "BUY"),
-            "RSI帯域内(BUY)": config.RSI_BUY_MIN <= latest["rsi"] <= config.RSI_BUY_MAX,
-            "スプレッド許容内": spread_ok,
-            "ATR最低値以上": atr_ok,
-            "MACDヒストグラムが方向一致": latest["macd_hist"] > 0,
-        }
-        sell_required = {
-            "下降トレンド(EMA)": latest["ema_fast"] < latest["ema_slow"],
-            "上位足(H1)が下降方向": h1_direction in (None, "SELL"),
-            "戻りからの回復": self._pullback_ok(df, "SELL"),
-            "RSI帯域内(SELL)": config.RSI_SELL_MIN <= latest["rsi"] <= config.RSI_SELL_MAX,
-            "スプレッド許容内": spread_ok,
-            "ATR最低値以上": atr_ok,
-            "MACDヒストグラムが方向一致": latest["macd_hist"] < 0,
-        }
+        buy_score, buy_total, buy_failed = self._score_conditions(
+            df, "BUY", latest, h1_direction, h1_details, macd_expanding, atr_ok
+        )
+        sell_score, sell_total, sell_failed = self._score_conditions(
+            df, "SELL", latest, h1_direction, h1_details, macd_expanding, atr_ok
+        )
 
-        if config.REQUIRE_NO_NEW_EXTREME_5BARS:
-            no_new_low, no_new_high = self._no_new_extreme_5bars(df)
-            buy_required["直近5本の安値を更新せず"] = no_new_low
-            sell_required["直近5本の高値を更新せず"] = no_new_high
-
-        buy_score, buy_bonus_reasons = self._bonus_score(df, "BUY", h1_details, macd_expanding)
-        sell_score, sell_bonus_reasons = self._bonus_score(df, "SELL", h1_details, macd_expanding)
-
-        buy_ok = all(buy_required.values())
-        sell_ok = all(sell_required.values())
         required_score = config.REQUIRED_SCORE
+        buy_confidence = round((buy_score / buy_total) * 100) if buy_total else 0
+        sell_confidence = round((sell_score / sell_total) * 100) if sell_total else 0
 
-        buy_confidence = round((sum(buy_required.values()) / len(buy_required)) * 50 + (buy_score / _BONUS_CONDITION_COUNT) * 50)
-        sell_confidence = round((sum(sell_required.values()) / len(sell_required)) * 50 + (sell_score / _BONUS_CONDITION_COUNT) * 50)
+        buy_qualifies = buy_score >= required_score
+        sell_qualifies = sell_score >= required_score
 
-        if buy_ok and buy_score >= required_score:
-            reason = f"必須条件を全て満たし、加点{buy_score}点({'/'.join(buy_bonus_reasons) or 'なし'})"
-            details.update(
-                score=buy_score, required_score=required_score, bonus_reasons=buy_bonus_reasons, failed_required=[]
-            )
+        if buy_qualifies and (not sell_qualifies or buy_score >= sell_score):
+            reason = f"スコア{buy_score}/{buy_total}点で必要点数({required_score})に到達"
+            details.update(score=buy_score, required_score=required_score, failed_required=None)
             return Signal("BUY", reason, details, buy_confidence)
 
-        if sell_ok and sell_score >= required_score:
-            reason = f"必須条件を全て満たし、加点{sell_score}点({'/'.join(sell_bonus_reasons) or 'なし'})"
-            details.update(
-                score=sell_score, required_score=required_score, bonus_reasons=sell_bonus_reasons, failed_required=[]
-            )
+        if sell_qualifies:
+            reason = f"スコア{sell_score}/{sell_total}点で必要点数({required_score})に到達"
+            details.update(score=sell_score, required_score=required_score, failed_required=None)
             return Signal("SELL", reason, details, sell_confidence)
 
-        if buy_ok or sell_ok:
-            direction = "BUY" if buy_ok else "SELL"
-            score = buy_score if buy_ok else sell_score
-            bonus_reasons = buy_bonus_reasons if buy_ok else sell_bonus_reasons
-            reason = f"必須条件は満たすが加点不足({direction}: {score}/{required_score}点)"
-            details.update(
-                score=score, required_score=required_score, bonus_reasons=bonus_reasons, failed_required=[]
-            )
-        else:
-            failed_buy = [k for k, v in buy_required.items() if not v]
-            failed_sell = [k for k, v in sell_required.items() if not v]
-            reason = f"必須条件が未達(BUY未達: {', '.join(failed_buy) or 'なし'} / SELL未達: {', '.join(failed_sell) or 'なし'})"
-            details.update(
-                score=0,
-                required_score=required_score,
-                bonus_reasons=[],
-                failed_required={"BUY": failed_buy, "SELL": failed_sell},
-            )
-
+        reason = (
+            f"必要点数({required_score})未達"
+            f"(BUY: {buy_score}/{buy_total}点、未達: {', '.join(buy_failed) or 'なし'} / "
+            f"SELL: {sell_score}/{sell_total}点、未達: {', '.join(sell_failed) or 'なし'})"
+        )
+        details.update(
+            score=max(buy_score, sell_score),
+            required_score=required_score,
+            failed_required={"BUY": buy_failed, "SELL": sell_failed},
+        )
         return Signal("WAIT", reason, details, max(buy_confidence, sell_confidence))
 
     def _spread_ok(self, latest: pd.Series) -> bool:
@@ -308,52 +290,75 @@ class RuleBasedAIEngine(AIEngine):
         no_new_high = bool(latest["high"] <= window["high"].max())
         return no_new_low, no_new_high
 
-    def _bonus_score(
-        self, df: pd.DataFrame, direction: str, h1_details: dict[str, Any], macd_expanding: str | None
-    ) -> tuple[int, list[str]]:
-        latest = df.iloc[-1]
+    def _score_conditions(
+        self,
+        df: pd.DataFrame,
+        direction: str,
+        latest: pd.Series,
+        h1_direction: str | None,
+        h1_details: dict[str, Any],
+        macd_expanding: str | None,
+        atr_ok: bool,
+    ) -> tuple[int, int, list[str]]:
+        """指定した方向(BUY/SELL)について、各判断条件を1点ずつ採点する。
+
+        H1データ不足などで判定不能な条件(上位足フィルター・上位足EMA傾き)は
+        減点にはせず、その条件自体を対象外にする(scoreにもtotalにも算入
+        しない。判定できないことを理由にエントリー機会を狭めないため)。
+        戻り値は(獲得点数, 満点, 未達条件のラベル一覧)。
+        """
         is_buy = direction == "BUY"
-        score = 0
-        reasons: list[str] = []
+        rsi_min, rsi_max = (config.RSI_BUY_MIN, config.RSI_BUY_MAX) if is_buy else (config.RSI_SELL_MIN, config.RSI_SELL_MAX)
+
+        conditions: list[tuple[str, bool]] = [
+            ("上昇トレンド(EMA)" if is_buy else "下降トレンド(EMA)", (latest["ema_fast"] > latest["ema_slow"]) == is_buy),
+            ("押し目からの回復" if is_buy else "戻りからの回復", self._pullback_ok(df, direction)),
+            (f"RSI帯域内({direction})", rsi_min <= latest["rsi"] <= rsi_max),
+            ("ATR最低値以上", atr_ok),
+            ("MACDヒストグラムが方向一致", (latest["macd_hist"] > 0) if is_buy else (latest["macd_hist"] < 0)),
+        ]
 
         if len(df) >= 2:
             prev = df.iloc[-2]
-            if (is_buy and latest["ema_fast"] > prev["ema_fast"]) or (
-                not is_buy and latest["ema_fast"] < prev["ema_fast"]
-            ):
-                score += 1
-                reasons.append("EMAの傾きが方向一致")
+            slope_up = latest["ema_fast"] > prev["ema_fast"]
+            conditions.append(("EMAの傾きが方向一致", slope_up == is_buy))
 
         if "open" in latest and not pd.isna(latest["open"]):
-            if (is_buy and latest["close"] > latest["open"]) or (not is_buy and latest["close"] < latest["open"]):
-                score += 1
-                reasons.append("直近足の実体が方向一致")
+            body_up = latest["close"] > latest["open"]
+            conditions.append(("直近足の実体が方向一致", body_up == is_buy))
 
         if len(df) >= 3:
             recent = df.iloc[-3:]
-            if is_buy and recent["low"].is_monotonic_increasing:
-                score += 1
-                reasons.append("直近3本の安値が切り上げ")
-            elif not is_buy and recent["high"].is_monotonic_decreasing:
-                score += 1
-                reasons.append("直近3本の高値が切り下げ")
+            structure_ok = recent["low"].is_monotonic_increasing if is_buy else recent["high"].is_monotonic_decreasing
+            label = "直近3本の安値が切り上げ" if is_buy else "直近3本の高値が切り下げ"
+            conditions.append((label, bool(structure_ok)))
 
         if "rsi" in latest and not pd.isna(latest["rsi"]):
-            if (is_buy and latest["rsi"] > 50.0) or (not is_buy and latest["rsi"] < 50.0):
-                score += 1
-                reasons.append("RSIが50を方向側に超過")
+            momentum_ok = (latest["rsi"] > 50.0) if is_buy else (latest["rsi"] < 50.0)
+            conditions.append(("RSIが50を方向側に超過", momentum_ok))
 
+        if config.REQUIRE_NO_NEW_EXTREME_5BARS:
+            no_new_low, no_new_high = self._no_new_extreme_5bars(df)
+            label = "直近5本の安値を更新せず" if is_buy else "直近5本の高値を更新せず"
+            conditions.append((label, no_new_low if is_buy else no_new_high))
+
+        # H1関連の2条件は判定不能(データ不足)ならスコア対象から除外する。
+        if h1_direction is not None:
+            conditions.append(("上位足(H1)が方向一致", h1_direction == direction))
         h1_slope_up = h1_details.get("h1_slope_up")
         if h1_slope_up is not None:
-            if (is_buy and h1_slope_up) or (not is_buy and not h1_slope_up):
-                score += 1
-                reasons.append("上位足(H1)のEMAも方向一致")
+            conditions.append(("上位足(H1)のEMAも方向一致", h1_slope_up == is_buy))
 
-        if macd_expanding == direction:
-            score += 1
-            reasons.append("MACDヒストグラムが拡大方向")
+        # macd_expandingは「拡大している方向」または"MACD不拡大"を表すNone
+        # のいずれか(_macd_expanding参照)。判定不能ではなく「拡大していない」
+        # という確定情報なので、他の条件と同様に0/1点で扱う(H1と違い判定
+        # 不能ケースが無いため除外しない)。
+        conditions.append(("MACDヒストグラムが拡大方向", macd_expanding == direction))
 
-        return score, reasons
+        score = sum(1 for _, ok in conditions if ok)
+        total = len(conditions)
+        failed = [label for label, ok in conditions if not ok]
+        return score, total, failed
 
 
 class UnavailableAIEngine(AIEngine):
