@@ -406,6 +406,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+# Gemini Flash系モデルは無料枠がある(2026-07時点、1日あたりのリクエスト数
+# 上限内なら無課金)。ローソク足更新時のみ呼ぶ節約設計(CandleThrottledEngine)
+# と組み合わせれば、実質無料で運用できる想定。
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 AI_ENGINE_TIMEOUT_SECONDS = _env_int("AI_ENGINE_TIMEOUT_SECONDS", 20)
 
 # --- 実行制御 ---

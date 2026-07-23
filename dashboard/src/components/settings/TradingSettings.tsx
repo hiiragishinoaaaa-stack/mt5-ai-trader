@@ -165,8 +165,12 @@ export function TradingSettings() {
           <span className="text-xs text-ink-faint">
             {draft.AI_ENGINE === "rule_based"
               ? "EMA/RSI/MACDのルールでBUY/SELL/WAITを判断します(無料)"
-              : "実際にAPIを呼び出して判断します(利用ごとに料金が発生します)。.envに" +
-                (draft.AI_ENGINE === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY") +
+              : "実際にAPIを呼び出して判断します" +
+                (draft.AI_ENGINE === "gemini" ? "(Flash系モデルなら無料枠あり)" : "(利用ごとに料金が発生します)") +
+                "。.envに" +
+                { openai: "OPENAI_API_KEY", claude: "ANTHROPIC_API_KEY", gemini: "GEMINI_API_KEY" }[
+                  draft.AI_ENGINE as "openai" | "claude" | "gemini"
+                ] +
                 "を設定していない場合、常にWAITになります"}
           </span>
         </div>

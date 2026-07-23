@@ -43,10 +43,11 @@ export type EntryStrictness = "conservative" | "balanced" | "aggressive" | "acti
 // SL/TPの決め方。fixed=SL_POINTS/TP_POINTS固定、atr=ATR(14)×倍率で毎回動的に計算。
 export type StopMode = "fixed" | "atr";
 
-// rule_based(ヒューリスティック) / openai / claude(いずれもLLM API連携、
-// 実際に利用ごとに料金が発生する)。APIキー自体はセキュリティ上の理由で
-// Dashboardには出さず.envでのみ設定するため、ここにキーのフィールドは無い。
-export type AiEngineChoice = "rule_based" | "openai" | "claude";
+// rule_based(ヒューリスティック) / openai / claude / gemini(いずれもLLM API連携、
+// 実際に利用ごとに料金が発生する。geminiはFlash系モデルなら無料枠あり)。
+// APIキー自体はセキュリティ上の理由でDashboardには出さず.envでのみ設定する
+// ため、ここにキーのフィールドは無い。
+export type AiEngineChoice = "rule_based" | "openai" | "claude" | "gemini";
 
 // Dashboardの「銘柄」トグルで選べる候補一覧。Python側の
 // settings_schema.AVAILABLE_SYMBOLSと1:1で対応する(唯一の正はPython側)。

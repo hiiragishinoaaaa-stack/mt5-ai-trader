@@ -243,7 +243,7 @@ def test_get_ai_engine_returns_rule_based_by_default():
 
 
 def test_get_ai_engine_unimplemented_raises_on_decide():
-    engine = get_ai_engine("gemini")
+    engine = get_ai_engine("mistral")
     try:
         engine.decide(pd.DataFrame())
         assert False, "NotImplementedErrorが送出されるべき"
@@ -265,6 +265,14 @@ def test_get_ai_engine_returns_claude_engine_wrapped_in_throttle():
     engine = get_ai_engine("claude")
     assert isinstance(engine, CandleThrottledEngine)
     assert isinstance(engine._inner, ClaudeEngine)
+
+
+def test_get_ai_engine_returns_gemini_engine_wrapped_in_throttle():
+    from gemini_engine import GeminiEngine
+
+    engine = get_ai_engine("gemini")
+    assert isinstance(engine, CandleThrottledEngine)
+    assert isinstance(engine._inner, GeminiEngine)
 
 
 # --- describe_market_conditions ---------------------------------------------

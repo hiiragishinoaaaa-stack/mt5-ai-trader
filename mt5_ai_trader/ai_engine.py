@@ -487,5 +487,9 @@ def get_ai_engine(engine_name: str | None = None) -> AIEngine:
         from claude_engine import ClaudeEngine  # 遅延import(理由は上と同じ)
 
         return CandleThrottledEngine(ClaudeEngine())
+    if name == "gemini":
+        from gemini_engine import GeminiEngine  # 遅延import(理由は上と同じ)
+
+        return CandleThrottledEngine(GeminiEngine())
 
     return UnavailableAIEngine(name)

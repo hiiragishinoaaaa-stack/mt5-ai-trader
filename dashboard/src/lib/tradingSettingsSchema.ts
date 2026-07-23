@@ -58,6 +58,7 @@ export const AI_ENGINE_LABELS: Record<AiEngineChoice, string> = {
   rule_based: "Rule-based",
   openai: "OpenAI",
   claude: "Claude",
+  gemini: "Gemini",
 };
 
 // Python側のsettings_schema.AVAILABLE_SYMBOLSと1:1で対応する(唯一の正は

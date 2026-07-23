@@ -137,7 +137,7 @@ def test_validate_accepts_all_ai_engine_choices():
 
 
 def test_validate_rejects_invalid_ai_engine_choice():
-    cleaned, errors = settings_schema.validate({"AI_ENGINE": "gemini"})
+    cleaned, errors = settings_schema.validate({"AI_ENGINE": "mistral"})
 
     assert "AI_ENGINE" in errors
     assert "AI_ENGINE" not in cleaned

@@ -26,7 +26,7 @@ AVAILABLE_SYMBOLS = ("USDJPY", "EURUSD")
 # DashboardのSettings画面から選べるAI判断エンジン。OPENAI_API_KEY/
 # ANTHROPIC_API_KEYはセキュリティ上の理由でFIELDSに含めない(.envでのみ設定、
 # config.pyのコメント参照)。
-AI_ENGINE_CHOICES = ("rule_based", "openai", "claude")
+AI_ENGINE_CHOICES = ("rule_based", "openai", "claude", "gemini")
 
 # DashboardのHome画面のSTART/STOP/EMERGENCY STOPボタンと1:1対応する。
 # STOPPED/EMERGENCY_STOPPEDのときmain.pyは判断・発注をスキップする
