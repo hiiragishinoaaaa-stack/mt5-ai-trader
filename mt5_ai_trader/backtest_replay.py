@@ -204,6 +204,71 @@ def _decide_action(bar: BarScore, required_score: int) -> str:
     return "WAIT"
 
 
+def _resolve_exit(
+    is_buy: bool,
+    entry_price: float,
+    high: float,
+    low: float,
+    sl_points: float,
+    tp_points: float,
+    point_size: float,
+    optimistic_fill: bool,
+) -> tuple[float, str] | None:
+    """1本のバーのhigh/lowに対して、SL/TPどちらかに触れたかを判定する
+    (触れていなければNone)。simulate()とgemini_shadow_report.pyの両方から
+    共通で使う(決済判定の簡略化はモジュールdocstring参照)。
+    """
+    tp_price = entry_price + tp_points * point_size if is_buy else entry_price - tp_points * point_size
+    sl_price = entry_price - sl_points * point_size if is_buy else entry_price + sl_points * point_size
+    hit_tp = high >= tp_price if is_buy else low <= tp_price
+    hit_sl = low <= sl_price if is_buy else high >= sl_price
+
+    if hit_tp and hit_sl:
+        return (tp_price, "take_profit") if optimistic_fill else (sl_price, "stop_loss")
+    if hit_sl:
+        return sl_price, "stop_loss"
+    if hit_tp:
+        return tp_price, "take_profit"
+    return None
+
+
+def simulate_trade_forward(
+    bars_after: list[tuple[int, pd.Timestamp, float, float]],
+    direction: str,
+    entry_index: int,
+    entry_time: pd.Timestamp,
+    entry_price: float,
+    sl_points: float,
+    tp_points: float,
+    point_size: float,
+    optimistic_fill: bool = False,
+) -> ReplayTrade:
+    """directionでentry_priceに1件エントリーしたと仮定し、bars_after
+    (エントリー後のバー、(index, time, high, low)のタプル列、古い順)に
+    沿ってSL/TP先着方式で決済まで進める。決済に至らなければ
+    reason="still_open"のまま返す。
+
+    simulate()(スコア閾値に基づく連続エントリーのシミュレーション)と
+    gemini_shadow_report.py(個別の1判断に対する仮想損益の計算)の両方から
+    使う共通処理。
+    """
+    is_buy = direction == "BUY"
+    trade = ReplayTrade(direction=direction, entry_index=entry_index, entry_time=entry_time, entry_price=entry_price)
+    for index, time, high, low in bars_after:
+        exit_info = _resolve_exit(is_buy, entry_price, high, low, sl_points, tp_points, point_size, optimistic_fill)
+        if exit_info is None:
+            continue
+        exit_price, reason = exit_info
+        pnl_price = (exit_price - entry_price) if is_buy else (entry_price - exit_price)
+        trade.exit_index = index
+        trade.exit_time = time
+        trade.exit_price = exit_price
+        trade.reason = reason
+        trade.pnl_points = pnl_price / point_size
+        break
+    return trade
+
+
 def simulate(
     bar_scores: list[BarScore],
     required_score: int,
@@ -224,29 +289,11 @@ def simulate(
     for bar in bar_scores:
         if open_trade is not None:
             is_buy = open_trade.direction == "BUY"
-            tp_price = (
-                open_trade.entry_price + tp_points * point_size
-                if is_buy
-                else open_trade.entry_price - tp_points * point_size
+            exit_info = _resolve_exit(
+                is_buy, open_trade.entry_price, bar.high, bar.low, sl_points, tp_points, point_size, optimistic_fill
             )
-            sl_price = (
-                open_trade.entry_price - sl_points * point_size
-                if is_buy
-                else open_trade.entry_price + sl_points * point_size
-            )
-            hit_tp = bar.high >= tp_price if is_buy else bar.low <= tp_price
-            hit_sl = bar.low <= sl_price if is_buy else bar.high >= sl_price
-
-            exit_price: float | None = None
-            reason: str | None = None
-            if hit_tp and hit_sl:
-                exit_price, reason = (tp_price, "take_profit") if optimistic_fill else (sl_price, "stop_loss")
-            elif hit_sl:
-                exit_price, reason = sl_price, "stop_loss"
-            elif hit_tp:
-                exit_price, reason = tp_price, "take_profit"
-
-            if reason is not None:
+            if exit_info is not None:
+                exit_price, reason = exit_info
                 pnl_price = (exit_price - open_trade.entry_price) if is_buy else (open_trade.entry_price - exit_price)
                 open_trade.exit_index = bar.index
                 open_trade.exit_time = bar.time
