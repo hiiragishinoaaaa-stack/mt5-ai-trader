@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import config
 from ai_engine import Signal
@@ -17,6 +18,37 @@ from ai_engine import Signal
 
 class AiStatusError(RuntimeError):
     """ステータスファイルの取得・検証に失敗した場合に送出する。"""
+
+
+def _rotate_if_needed(file_path: Path) -> None:
+    """file_pathのサイズがconfig.AI_LOG_MAX_BYTES以上なら世代交代
+    ローテーションする(<file>.1.jsonl → .2.jsonl → ...、config.
+    AI_LOG_BACKUP_COUNT世代を超えた最古の世代は削除)。
+
+    ai_decisions.jsonl/ai_shadow_log.jsonlはどちらも無制限に追記され
+    続けるため、放置するとディスクを食い潰す(2026-07、Fable5との相談を
+    踏まえて追加)。append_decision_log/append_shadow_logが追記の直前に
+    呼び出す。AI_LOG_MAX_BYTES<=0の場合は何もしない(無効化)。
+    """
+    if config.AI_LOG_MAX_BYTES <= 0:
+        return
+    if not file_path.exists() or file_path.stat().st_size < config.AI_LOG_MAX_BYTES:
+        return
+
+    backup_count = config.AI_LOG_BACKUP_COUNT
+    if backup_count <= 0:
+        file_path.unlink()
+        return
+
+    oldest = file_path.with_name(f"{file_path.stem}.{backup_count}{file_path.suffix}")
+    if oldest.exists():
+        oldest.unlink()
+    for gen in range(backup_count - 1, 0, -1):
+        src = file_path.with_name(f"{file_path.stem}.{gen}{file_path.suffix}")
+        if src.exists():
+            dst = file_path.with_name(f"{file_path.stem}.{gen + 1}{file_path.suffix}")
+            src.rename(dst)
+    file_path.rename(file_path.with_name(f"{file_path.stem}.1{file_path.suffix}"))
 
 
 @dataclass
@@ -92,6 +124,12 @@ def append_decision_log(signal: Signal, symbol: str, timeframe: str) -> None:
     1行1JSONで追記していく。RuleBasedAIEngine以外(LLM系エンジン等)では
     該当キーがdetailsに無いためnullになる。
 
+    得点内訳だけでなく、その足の生の指標値(open/close/high/low/ema_fast/
+    ema_slow/rsi/macd_hist/atr/spread/H1系)も一緒に記録する(2026-07、
+    Fable5との相談を踏まえて追加)。スコアだけだと「RSI帯域を変えたら
+    どうなっていたか」のような条件そのものの見直しが過去ログからはできない
+    ため、生値もあれば再稼働なしで再採点できる。
+
     書き込み失敗(ディスク容量不足等)は呼び出し元(main.py)でログに
     残すだけにとどめ、判断・発注フロー自体は止めない設計を踏襲する
     (write_status関数のdocstring参照)。
@@ -112,9 +150,24 @@ def append_decision_log(signal: Signal, symbol: str, timeframe: str) -> None:
         "sell_failed": signal.details.get("sell_failed"),
         "adx": signal.details.get("adx"),
         "regime": signal.details.get("regime"),
+        "open": signal.details.get("open"),
+        "close": signal.details.get("close"),
+        "high": signal.details.get("high"),
+        "low": signal.details.get("low"),
+        "ema_fast": signal.details.get("ema_fast"),
+        "ema_slow": signal.details.get("ema_slow"),
+        "rsi": signal.details.get("rsi"),
+        "macd_hist": signal.details.get("macd_hist"),
+        "atr": signal.details.get("atr"),
+        "spread": signal.details.get("spread"),
+        "h1_ema_fast": signal.details.get("h1_ema_fast"),
+        "h1_ema_slow": signal.details.get("h1_ema_slow"),
+        "h1_slope_up": signal.details.get("h1_slope_up"),
+        "h1_bars": signal.details.get("h1_bars"),
     }
     file_path = config.decision_log_file_path(symbol)
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_if_needed(file_path)
     with file_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False))
         f.write("\n")
@@ -145,6 +198,7 @@ def append_shadow_log(rule_signal: Signal, shadow_signal: Signal, symbol: str, t
     }
     file_path = config.shadow_log_file_path(symbol)
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_if_needed(file_path)
     with file_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False))
         f.write("\n")

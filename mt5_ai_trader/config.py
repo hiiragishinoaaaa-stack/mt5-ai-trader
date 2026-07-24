@@ -145,6 +145,15 @@ AI_SHADOW_LOG_PATH = (
     Path(_ai_shadow_log_path_env) if _ai_shadow_log_path_env else BASE_DIR / "logs" / "ai_shadow_log.jsonl"
 )
 
+# AI_DECISION_LOG_PATH/AI_SHADOW_LOG_PATHはどちらも無制限に追記され続ける
+# ため、放置するとVPSのディスクを食い潰す(2026-07、Fable5との相談を踏まえて
+# 追加)。ファイルサイズがこの値(バイト)以上になったら、ai_status._rotate_
+# if_neededが世代交代ローテーションする(<file>.1.jsonl → .2.jsonl → ...、
+# AI_LOG_BACKUP_COUNT世代を超えた最古の世代は削除)。0以下でローテーション
+# 自体を無効化する。
+AI_LOG_MAX_BYTES = _env_int("AI_LOG_MAX_BYTES", 20 * 1024 * 1024)  # 既定20MB
+AI_LOG_BACKUP_COUNT = _env_int("AI_LOG_BACKUP_COUNT", 5)
+
 # --- 発注(Phase2) ---
 # ENABLE_ORDERSとDEMO_ONLYの両方が明示的にtrueの場合のみ発注リクエストを
 # 書き出す(既定はどちらもfalse)。ENABLE_ORDERSは「発注そのものを行うか」、
