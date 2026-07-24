@@ -39,7 +39,7 @@
 
 input string           InpSymbol     = "USDJPY";                 // Symbol to export
 input ENUM_TIMEFRAMES  InpTimeframe  = PERIOD_M15;                // Timeframe to export
-input int              InpBarsCount  = 5000;                      // Number of candles to request (actual count depends on broker history depth)
+input int              InpBarsCount  = 200000;                    // Number of candles to request (actual count depends on broker history depth)
 input string           InpOutputFile = "";                        // Output file name (common folder). Leave blank for an automatic name.
 
 //+------------------------------------------------------------------+
@@ -97,28 +97,38 @@ void OnStart()
       return;
    }
 
-   string json = "{";
-   json += "\"symbol\":\"" + JsonEscape(InpSymbol) + "\",";
-   json += "\"timeframe\":\"" + TimeframeToString(InpTimeframe) + "\",";
-   json += "\"exported_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",";
-   json += "\"candles\":[";
+   // Write the JSON incrementally, one candle per FileWriteString() call,
+   // instead of building one giant in-memory string first. Concatenating
+   // 100k+ candles into a single MQL5 string balloons to ~10 MB and the
+   // repeated reallocation exhausts memory / aborts the script ("Abnormal
+   // termination") on large exports. Streaming keeps memory flat and lets
+   // us export the broker's full history depth safely.
+   int digits = (int)SymbolInfoInteger(InpSymbol, SYMBOL_DIGITS);
+   if(digits <= 0)
+      digits = _Digits;
+
+   FileWriteString(handle, "{");
+   FileWriteString(handle, "\"symbol\":\"" + JsonEscape(InpSymbol) + "\",");
+   FileWriteString(handle, "\"timeframe\":\"" + TimeframeToString(InpTimeframe) + "\",");
+   FileWriteString(handle, "\"exported_at\":" + IntegerToString(ToUtcEpoch(TimeCurrent())) + ",");
+   FileWriteString(handle, "\"candles\":[");
    for(int i = 0; i < copied; i++)
    {
+      string row = "";
       if(i > 0)
-         json += ",";
-      json += "{";
-      json += "\"time\":" + IntegerToString(ToUtcEpoch(rates[i].time)) + ",";
-      json += "\"open\":" + DoubleToString(rates[i].open, _Digits) + ",";
-      json += "\"high\":" + DoubleToString(rates[i].high, _Digits) + ",";
-      json += "\"low\":" + DoubleToString(rates[i].low, _Digits) + ",";
-      json += "\"close\":" + DoubleToString(rates[i].close, _Digits) + ",";
-      json += "\"spread\":" + IntegerToString((long)rates[i].spread);
-      json += "}";
+         row += ",";
+      row += "{";
+      row += "\"time\":" + IntegerToString(ToUtcEpoch(rates[i].time)) + ",";
+      row += "\"open\":" + DoubleToString(rates[i].open, digits) + ",";
+      row += "\"high\":" + DoubleToString(rates[i].high, digits) + ",";
+      row += "\"low\":" + DoubleToString(rates[i].low, digits) + ",";
+      row += "\"close\":" + DoubleToString(rates[i].close, digits) + ",";
+      row += "\"spread\":" + IntegerToString((long)rates[i].spread);
+      row += "}";
+      FileWriteString(handle, row);
    }
-   json += "]";
-   json += "}";
-
-   FileWriteString(handle, json);
+   FileWriteString(handle, "]");
+   FileWriteString(handle, "}");
    FileClose(handle);
 
    if(!FileMove(tmp_file, FILE_COMMON, output_file, FILE_REWRITE | FILE_COMMON))
