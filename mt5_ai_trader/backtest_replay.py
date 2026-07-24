@@ -172,6 +172,20 @@ def load_candles(path: str | Path) -> pd.DataFrame:
     return df.sort_values("time").reset_index(drop=True)
 
 
+def infer_point_size(candles: pd.DataFrame) -> float:
+    """明示指定が無いとき、価格の桁感からブローカーの1ポイント値を推定する。
+
+    FXメジャーは建値の大きさで綺麗に分かれる: JPYクロス(USDJPY等)は
+    100〜200台=3桁価格でpoint=0.001、その他メジャー(EURUSD等)は
+    0.6〜1.5台=5桁価格でpoint=0.00001。point_sizeを取り違えるとSL/TPに
+    永遠に到達せず、forward決済の先読み走査が実質フリーズするため、
+    複数通貨を監査する際の事故を防ぐ目的で自動推定する。呼び出し側は
+    --point-size で明示的に上書きできる。
+    """
+    median_close = float(candles["close"].median())
+    return 0.001 if median_close >= 10.0 else 0.00001
+
+
 def compute_bar_scores(candles: pd.DataFrame, bars_count: int) -> list[BarScore]:
     """本番と同じローリングウィンドウ方式で、各バー時点でのBUY/SELLスコア
     内訳を計算する(モジュールdocstring「本番との整合性」参照)。
@@ -428,10 +442,19 @@ def main() -> None:
     bars_count = args.bars_count or config.BARS_COUNT
     sl_points = args.sl_points if args.sl_points is not None else config.SL_POINTS
     tp_points = args.tp_points if args.tp_points is not None else config.TP_POINTS
-    point_size = args.point_size if args.point_size is not None else config.POINT_SIZE
 
     print(f"{args.candles_file} を読み込んでいます...")
     candles = load_candles(args.candles_file)
+
+    if args.point_size is not None:
+        point_size = args.point_size
+    else:
+        point_size = infer_point_size(candles)
+        print(
+            f"point_size を価格から自動判定しました: {point_size}"
+            f"(中央値={float(candles['close'].median()):.3f})。"
+            "--point-size で明示指定も可能です。"
+        )
     print(f"{len(candles)}本のローソク足を読み込みました。ウィンドウ本数={bars_count}本でスコアを計算しています"
           "(本数が多いと数分かかることがあります)...")
 

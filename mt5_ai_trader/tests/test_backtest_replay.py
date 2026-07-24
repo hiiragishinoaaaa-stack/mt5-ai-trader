@@ -233,6 +233,16 @@ def test_load_candles_raises_on_empty_candles(tmp_path):
         replay.load_candles(path)
 
 
+def test_infer_point_size_jpy_pair():
+    candles = pd.DataFrame({"close": [163.8, 164.1, 162.9]})
+    assert replay.infer_point_size(candles) == 0.001
+
+
+def test_infer_point_size_non_jpy_pair():
+    candles = pd.DataFrame({"close": [1.1368, 1.1401, 1.1290]})
+    assert replay.infer_point_size(candles) == 0.00001
+
+
 # --- compute_bar_scores: 本番ロジックとの結合テスト -----------------------------
 
 

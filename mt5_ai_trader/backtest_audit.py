@@ -57,7 +57,7 @@ import pandas as pd
 import config
 import indicators
 from ai_engine import RuleBasedAIEngine
-from backtest_replay import ReplayResult, ReplayTrade, _resolve_exit, load_candles
+from backtest_replay import ReplayResult, ReplayTrade, _resolve_exit, infer_point_size, load_candles
 
 # 方向で文言が違う条件を、方向非依存の「条件ファミリー」名へまとめる
 # (単一条件バックテストでBUY側・SELL側を同じエッジとして合算するため)。
@@ -489,7 +489,6 @@ def main() -> None:
     bars_count = args.bars_count or config.BARS_COUNT
     sl_points = args.sl_points if args.sl_points is not None else config.SL_POINTS
     tp_points = args.tp_points if args.tp_points is not None else config.TP_POINTS
-    point_size = args.point_size if args.point_size is not None else config.POINT_SIZE
     breakeven = breakeven_win_rate(sl_points, tp_points)
 
     if args.all_conditions:
@@ -498,6 +497,16 @@ def main() -> None:
 
     print(f"{args.candles_file} を読み込んでいます...")
     candles = load_candles(args.candles_file)
+
+    if args.point_size is not None:
+        point_size = args.point_size
+    else:
+        point_size = infer_point_size(candles)
+        print(
+            f"point_size を価格から自動判定しました: {point_size}"
+            f"(中央値={float(candles['close'].median()):.3f})。"
+            "--point-size で明示指定も可能です。"
+        )
 
     fee_note = f"、往復スプレッド{args.spread_points}pt考慮" if args.spread_points else "、スプレッド未考慮"
 
