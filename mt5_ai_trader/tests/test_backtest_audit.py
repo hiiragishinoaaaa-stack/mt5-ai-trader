@@ -7,7 +7,15 @@ import pandas as pd
 import pytest
 
 import backtest_audit as audit
-from backtest_audit import AuditBar, baseline_result, breakeven_win_rate, quantile_results, single_condition_results
+from backtest_audit import (
+    AuditBar,
+    _quarter_key,
+    assign_periods,
+    baseline_result,
+    breakeven_win_rate,
+    quantile_results,
+    single_condition_results,
+)
 from backtest_replay import ReplayTrade
 
 
@@ -248,3 +256,89 @@ def test_main_runs_end_to_end(tmp_path, monkeypatch, capsys):
     assert "ベースライン" in out
     assert "単一条件" in out
     assert "損益分岐%" in out
+
+
+# --- 期間別(by-period)モード ---------------------------------------------------
+
+
+def test_quarter_key_maps_month_to_quarter():
+    assert _quarter_key(pd.Timestamp("2024-01-15")) == "2024-Q1"
+    assert _quarter_key(pd.Timestamp("2024-04-01")) == "2024-Q2"
+    assert _quarter_key(pd.Timestamp("2024-09-30")) == "2024-Q3"
+    assert _quarter_key(pd.Timestamp("2024-12-31")) == "2024-Q4"
+
+
+def test_assign_periods_separates_discovery_window():
+    """直近discovery_days日は四半期側から分離され "[発見]" になる。"""
+    base = pd.Timestamp("2024-06-30")
+    bars = [
+        _audit_bar(0, "BUY", [], []),  # 古い(四半期側)
+        _audit_bar(1, "BUY", [], []),  # 直近(発見側)
+    ]
+    bars[0].time = pd.Timestamp("2024-01-10")  # cutoffより前
+    bars[1].time = base  # 最新
+
+    groups = assign_periods(bars, discovery_days=30)
+
+    assert "[発見]" in groups
+    assert len(groups["[発見]"]) == 1
+    assert groups["[発見]"][0].index == 1
+    # 古いバーは四半期キーへ
+    quarter_keys = [k for k in groups if k != "[発見]"]
+    assert quarter_keys == ["2024-Q1"]
+    assert groups["2024-Q1"][0].index == 0
+
+
+def test_compute_period_bars_computes_metrics_without_conditions():
+    candles = _synthetic_candles(300)
+    bars = audit.compute_period_bars(candles, bars_count=100)
+
+    assert bars
+    bar = bars[-1]
+    # 軽量版なので条件別成否は計算しない(空)
+    assert bar.buy_conditions == []
+    assert bar.sell_conditions == []
+    # だが分位・レジームに必要な指標は入っている
+    assert bar.rsi is not None
+    assert bar.macd_hist is not None
+    assert bar.regime in ("TRENDING", "RANGING", None)
+
+
+def test_main_by_period_runs_end_to_end(tmp_path, monkeypatch, capsys):
+    candles = _synthetic_candles(400)
+    payload = {
+        "symbol": "USDJPY",
+        "timeframe": "M15",
+        "exported_at": int(candles.iloc[-1]["time"].timestamp()),
+        "candles": [
+            {
+                "time": int(row.time.timestamp()),
+                "open": row.open,
+                "high": row.high,
+                "low": row.low,
+                "close": row.close,
+                "spread": 2,
+            }
+            for row in candles.itertuples()
+        ],
+    }
+    candles_file = tmp_path / "history.json"
+    candles_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backtest_audit.py",
+            "--candles-file", str(candles_file),
+            "--bars-count", "100",
+            "--by-period",
+            "--discovery-days", "1",
+        ],
+    )
+
+    audit.main()
+
+    out = capsys.readouterr().out
+    assert "期間別の概況" in out
+    assert "単調性の方向" in out
+    assert "ADX<25%" in out

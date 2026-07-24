@@ -48,16 +48,16 @@ backtest_replay.pyでの初回検証(USDJPY M15 5000本)で、(1)どの閾値で
 from __future__ import annotations
 
 import argparse
-import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 import config
 import indicators
 from ai_engine import RuleBasedAIEngine
-from backtest_replay import ReplayResult, ReplayTrade, load_candles, simulate_trade_forward
+from backtest_replay import ReplayResult, ReplayTrade, _resolve_exit, load_candles
 
 # 方向で文言が違う条件を、方向非依存の「条件ファミリー」名へまとめる
 # (単一条件バックテストでBUY側・SELL側を同じエッジとして合算するため)。
@@ -161,20 +161,39 @@ def precompute_forward_outcomes(
 ) -> dict[tuple[int, str], ReplayTrade]:
     """各AuditBarについて、そのバーの終値でBUY/SELLそれぞれにエントリーした
     場合のforward決済結果を事前計算する(全分析がこれを引くだけで済むように
-    してO(N^2)の再計算を避ける)。戻り値は{(bar_index, direction): trade}。
+    する)。戻り値は{(bar_index, direction): trade}。
+
+    決済判定はbacktest_replayと同じ_resolve_exit(共有プリミティブ)を使う。
+    2〜3年規模(数万本)でもO(N×平均決済バー数)で済むよう、リストのスライス
+    ではなくインデックス参照で後続バーを走査する(スライスするとO(N^2)に
+    なり、大規模データで実用的な時間で終わらない)。
     """
     all_bars = [
         (int(row.Index), row.time, float(row.high), float(row.low))
         for row in candles.itertuples(index=True)
     ]
+    n = len(all_bars)
     outcomes: dict[tuple[int, str], ReplayTrade] = {}
     for bar in audit_bars:
-        bars_after = all_bars[bar.index + 1 :]
         for direction in ("BUY", "SELL"):
-            outcomes[(bar.index, direction)] = simulate_trade_forward(
-                bars_after, direction, bar.index, bar.time, bar.close,
-                sl_points, tp_points, point_size, optimistic_fill, spread_points,
-            )
+            is_buy = direction == "BUY"
+            trade = ReplayTrade(direction=direction, entry_index=bar.index, entry_time=bar.time, entry_price=bar.close)
+            for k in range(bar.index + 1, n):
+                _, btime, bhigh, blow = all_bars[k]
+                exit_info = _resolve_exit(
+                    is_buy, bar.close, bhigh, blow, sl_points, tp_points, point_size, optimistic_fill
+                )
+                if exit_info is None:
+                    continue
+                exit_price, reason = exit_info
+                pnl_price = (exit_price - bar.close) if is_buy else (bar.close - exit_price)
+                trade.exit_index = k
+                trade.exit_time = btime
+                trade.exit_price = exit_price
+                trade.reason = reason
+                trade.pnl_points = pnl_price / point_size - spread_points
+                break
+            outcomes[(bar.index, direction)] = trade
     return outcomes
 
 
@@ -299,6 +318,142 @@ def _run_and_print(audit_bars: list[AuditBar], outcomes, breakeven: float, heade
             _print_result_row("    " + label, r, breakeven)
 
 
+# --- 期間別(--by-period): データ拡張時の"方向の保存"検証 ---------------------
+# Fable5の指示: 52日で見つけたエッジ(RSI低で勝つ等)が、年をまたいでも
+# "方向"を保つかを見る。派手な数字(44.9%等)は拡張でほぼ確実に縮むため、
+# 判定基準は数字の大きさではなく「単調性の符号が期間で反転しないか」。
+
+
+_QUANTILE_METRICS = (("rsi", "RSI"), ("ema_dist_atr", "EMA乖離/ATR"), ("atr_points", "ATR(pt)"), ("macd_hist", "MACDヒスト"))
+
+
+def compute_period_bars(candles: pd.DataFrame, bars_count: int) -> list[AuditBar]:
+    """--by-period分析用の軽量版。条件別成否(evaluate_conditions)は計算せず、
+    分位分析・レジーム・ベースラインに必要な指標(RSI/EMA乖離/ATR/MACD/ADX/
+    H1方向)だけを、全系列に対して1回add_indicators()して求める。
+
+    compute_audit_bars(バーごとにadd_indic+evaluate_conditions)は本番と
+    完全一致だが2〜3年規模だと重すぎる。こちらは全系列を1回だけ計算するため
+    桁違いに速い。EMA/RSI等は系列先頭付近で本番のローリングウィンドウ版と
+    厳密には一致しないが、単調性の"方向"を期間比較する用途では影響は無視できる
+    (十分なウォームアップ後の深いバーでは実質同一)。
+    """
+    enriched = indicators.add_indicators(candles)
+    threshold = config.ADX_TREND_THRESHOLD
+
+    # H1方向を全系列で1回だけリサンプルして求める(production
+    # _h1_trend_directionの高速近似)。
+    h1_dir_index = None
+    h1_dir_values: np.ndarray | None = None
+    if "time" in enriched.columns and not enriched["time"].isna().all():
+        times_idx = pd.to_datetime(enriched["time"])
+        h1_close = pd.Series(enriched["close"].values, index=times_idx).resample("1h").last().dropna()
+        if len(h1_close) >= 2:
+            hf = h1_close.ewm(span=config.H1_EMA_FAST_PERIOD, adjust=False).mean()
+            hs = h1_close.ewm(span=config.H1_EMA_SLOW_PERIOD, adjust=False).mean()
+            h1_dir_index = h1_close.index
+            h1_dir_values = np.where(hf.values > hs.values, "BUY", np.where(hf.values < hs.values, "SELL", None))
+
+    bars: list[AuditBar] = []
+    for i in range(len(enriched)):
+        if i < bars_count - 1:
+            continue
+        latest = enriched.iloc[i]
+        if pd.isna(latest.get("ema_fast")) or pd.isna(latest.get("rsi")) or pd.isna(latest.get("macd_hist")):
+            continue
+        adx = float(latest["adx"]) if "adx" in enriched.columns and not pd.isna(latest["adx"]) else None
+        regime = None if adx is None else ("TRENDING" if adx >= threshold else "RANGING")
+        atr = float(latest["atr"]) if "atr" in enriched.columns and not pd.isna(latest["atr"]) else None
+        ema_dist = (float(latest["close"]) - float(latest["ema_fast"])) / atr if atr and atr > 0 else None
+        atr_points = atr / config.POINT_SIZE if atr and config.POINT_SIZE > 0 else None
+        h1_direction = None
+        if h1_dir_values is not None:
+            t = pd.Timestamp(candles.iloc[i]["time"])
+            idx = h1_dir_index.searchsorted(t, side="right") - 1
+            if idx >= 0:
+                val = h1_dir_values[idx]
+                h1_direction = val if val in ("BUY", "SELL") else None
+        bars.append(
+            AuditBar(
+                index=i,
+                time=candles.iloc[i]["time"],
+                close=float(candles.iloc[i]["close"]),
+                h1_direction=h1_direction,
+                adx=adx,
+                regime=regime,
+                rsi=float(latest["rsi"]),
+                ema_dist_atr=ema_dist,
+                atr_points=atr_points,
+                macd_hist=float(latest["macd_hist"]),
+            )
+        )
+    return bars
+
+
+def _quarter_key(ts) -> str:
+    ts = pd.Timestamp(ts)
+    return f"{ts.year}-Q{(ts.month - 1) // 3 + 1}"
+
+
+def assign_periods(bars: list[AuditBar], discovery_days: int) -> dict[str, list[AuditBar]]:
+    """バーを四半期ごとに分ける。ただし直近discovery_days日(エッジを発見
+    するのに使った期間)は "[発見]" として別扱いにし、四半期側には含めない
+    (発見に使った期間と、それ以外[≒アウトオブサンプル]を分離する)。
+    """
+    groups: dict[str, list[AuditBar]] = defaultdict(list)
+    if not bars:
+        return groups
+    max_t = max(pd.Timestamp(b.time) for b in bars)
+    cutoff = max_t - pd.Timedelta(days=discovery_days)
+    for b in bars:
+        t = pd.Timestamp(b.time)
+        key = "[発見]" if t > cutoff else _quarter_key(t)
+        groups[key].append(b)
+    return groups
+
+
+def _period_order(keys) -> list[str]:
+    quarters = sorted(k for k in keys if k != "[発見]")
+    return quarters + (["[発見]"] if "[発見]" in keys else [])
+
+
+def run_by_period(bars: list[AuditBar], outcomes, discovery_days: int, breakeven: float, min_bars: int = 100) -> None:
+    groups = assign_periods(bars, discovery_days)
+    order = _period_order(groups.keys())
+    if not order:
+        print("期間別に分けられるバーがありませんでした。")
+        return
+
+    print("=== 期間別の概況(ADX<25=レンジ相場の割合、レジーム別のH1方向ベースライン勝率) ===")
+    print(f"{'期間':<12} {'バー数':>7} {'ADX<25%':>8} {'Tベース勝%':>11} {'Rベース勝%':>11}")
+    for key in order:
+        sub = groups[key]
+        ranging = [b for b in sub if b.regime == "RANGING"]
+        trending = [b for b in sub if b.regime == "TRENDING"]
+        adx_ratio = len(ranging) / len(sub) * 100 if sub else 0.0
+        t_win = baseline_result(trending, outcomes).win_rate if trending else 0.0
+        r_win = baseline_result(ranging, outcomes).win_rate if ranging else 0.0
+        print(f"{key:<12} {len(sub):>7} {adx_ratio:>8.1f} {t_win:>11.1f} {r_win:>11.1f}")
+
+    print(f"\n=== 単調性の方向(期間別、Q1勝率 − Q5勝率、BUYエントリー、損益分岐={breakeven:.1f}%) ===")
+    print("  正の値=指標が低い側で勝ちやすい(RSI/EMA乖離なら平均回帰)。")
+    print("  【重要】判定は数字の大きさではなく符号。符号が期間で反転しなければ、その"
+          "方向のエッジは保存されている(=本物の可能性)。反転するなら、その期間固有の"
+          "まぐれ。")
+    print(f"{'指標':<14}" + "".join(f"{k:>11}" for k in order))
+    for metric, jp in _QUANTILE_METRICS:
+        cells = []
+        for key in order:
+            sub = groups[key]
+            q = quantile_results(sub, outcomes, metric, "BUY", 5)
+            if len(q) < 2 or len(sub) < min_bars:
+                cells.append(f"{'-':>11}")
+            else:
+                spread = q[0][1].win_rate - q[-1][1].win_rate
+                cells.append(f"{spread:>+11.1f}")
+        print(f"{jp:<14}" + "".join(cells))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RuleBasedAIEngineの条件別エッジ監査ツール")
     parser.add_argument("--candles-file", required=True, help="ARTEMIS_HistoryExport.mq5が書き出したJSONファイル")
@@ -315,6 +470,20 @@ def main() -> None:
         "現在オフの条件も監査対象に含める(それらの条件に単独エッジがあるか確認したい場合)",
     )
     parser.add_argument("--no-regime-split", action="store_true", help="ADXレジーム別の内訳を出力しない")
+    parser.add_argument(
+        "--by-period",
+        action="store_true",
+        help="四半期別に単調性の方向(RSI低で勝つ等)が期間をまたいで保存されるかを検証する"
+        "(2〜3年の拡張データ向け。高速な軽量計算に切り替わり、条件別ではなく分位・レジームの"
+        "期間比較を出力する。データ拡張時はこちらを使う)",
+    )
+    parser.add_argument(
+        "--discovery-days",
+        type=int,
+        default=52,
+        help="--by-period時、直近この日数(既定52)を「エッジ発見に使った期間」として別扱いにし、"
+        "四半期側から分離する",
+    )
     args = parser.parse_args()
 
     bars_count = args.bars_count or config.BARS_COUNT
@@ -329,6 +498,32 @@ def main() -> None:
 
     print(f"{args.candles_file} を読み込んでいます...")
     candles = load_candles(args.candles_file)
+
+    fee_note = f"、往復スプレッド{args.spread_points}pt考慮" if args.spread_points else "、スプレッド未考慮"
+
+    if args.by_period:
+        print(f"{len(candles)}本を読み込みました。期間別分析用に指標を計算しています(軽量版)...")
+        bars = compute_period_bars(candles, bars_count)
+        if not bars:
+            print("分析できるバーがありませんでした(本数不足の可能性)。")
+            return
+        print(f"{len(bars)}バー分を計算しました。forward決済を事前計算しています(本数が多いと数分かかります)...")
+        outcomes = precompute_forward_outcomes(
+            candles, bars, sl_points, tp_points, point_size, args.spread_points, args.optimistic_fill
+        )
+        span_days = (pd.Timestamp(bars[-1].time) - pd.Timestamp(bars[0].time)).days
+        print(
+            f"\nSL={sl_points}pt / TP={tp_points}pt(損益分岐勝率={breakeven:.1f}%){fee_note}。"
+            f"期間: 約{span_days}日分。\n"
+        )
+        run_by_period(bars, outcomes, args.discovery_days, breakeven)
+        print(
+            "\n※ 拡張データでの読み方: 派手な数字は縮んで当然。見るのは『単調性の方向(符号)が"
+            "期間をまたいで保存されているか』。保存されていればそのエッジは本物の候補、"
+            "反転していればその期間固有のまぐれ。"
+        )
+        return
+
     print(f"{len(candles)}本を読み込みました。ウィンドウ={bars_count}本で条件を計算しています(数分かかることがあります)...")
 
     audit_bars = compute_audit_bars(candles, bars_count)
@@ -341,7 +536,6 @@ def main() -> None:
         candles, audit_bars, sl_points, tp_points, point_size, args.spread_points, args.optimistic_fill
     )
 
-    fee_note = f"、往復スプレッド{args.spread_points}pt考慮" if args.spread_points else "、スプレッド未考慮"
     print(
         f"\nSL={sl_points}pt / TP={tp_points}pt(損益分岐勝率={breakeven:.1f}%){fee_note}。"
         "「差」列がプラスなら損益分岐超え、マイナスなら期待値マイナス。\n"
