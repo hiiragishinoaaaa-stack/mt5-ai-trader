@@ -335,6 +335,44 @@ class RuleBasedAIEngine(AIEngine):
         しない。判定できないことを理由にエントリー機会を狭めないため)。
         戻り値は(獲得点数, 満点, 未達条件のラベル一覧)。
         """
+        conditions = self._build_conditions(df, direction, latest, h1_direction, h1_details, macd_expanding, atr_ok)
+        score = sum(1 for _, ok in conditions if ok)
+        total = len(conditions)
+        failed = [label for label, ok in conditions if not ok]
+        return score, total, failed
+
+    def evaluate_conditions(self, df: pd.DataFrame, direction: str) -> list[tuple[str, bool]]:
+        """指定方向の全判断条件を(ラベル, 成否)のリストで返す(バックテストの
+        条件別エッジ監査用、backtest_audit.py参照)。decide()と同じ前処理
+        (ATR・H1トレンド・MACD拡大)を行ってから_build_conditionsを呼ぶため、
+        本番と完全に同じ条件評価になる。df空・指標未計算の場合は空リスト。
+        """
+        if df.empty:
+            return []
+        latest = df.iloc[-1]
+        required = ("close", "ema_fast", "ema_slow", "rsi", "macd_hist")
+        if any(col not in df.columns or pd.isna(latest[col]) for col in required):
+            return []
+        atr_ok = self._atr_ok(latest)
+        h1_direction, h1_details = self._h1_trend_direction(df)
+        macd_expanding = self._macd_expanding(df)
+        return self._build_conditions(df, direction, latest, h1_direction, h1_details, macd_expanding, atr_ok)
+
+    def _build_conditions(
+        self,
+        df: pd.DataFrame,
+        direction: str,
+        latest: pd.Series,
+        h1_direction: str | None,
+        h1_details: dict[str, Any],
+        macd_expanding: str | None,
+        atr_ok: bool,
+    ) -> list[tuple[str, bool]]:
+        """各判断条件を(ラベル, 成否)のリストとして構築する(採点
+        [_score_conditions]と監査[evaluate_conditions]の共通ソース)。
+        H1関連等の判定不能な条件はそもそもリストに追加しない
+        (_score_conditionsのdocstring参照)。
+        """
         is_buy = direction == "BUY"
         rsi_min, rsi_max = (config.RSI_BUY_MIN, config.RSI_BUY_MAX) if is_buy else (config.RSI_SELL_MIN, config.RSI_SELL_MAX)
 
@@ -390,10 +428,10 @@ class RuleBasedAIEngine(AIEngine):
         # 不能ケースが無いため除外しない)。
         conditions.append(("MACDヒストグラムが拡大方向", macd_expanding == direction))
 
-        score = sum(1 for _, ok in conditions if ok)
-        total = len(conditions)
-        failed = [label for label, ok in conditions if not ok]
-        return score, total, failed
+        # numpy.bool_等が混在するため、素のPython boolへ正規化する
+        # (evaluate_conditions経由でJSON化・isinstance判定する監査ツールでも
+        # 安全に扱えるようにするため)。
+        return [(label, bool(ok)) for label, ok in conditions]
 
 
 class UnavailableAIEngine(AIEngine):

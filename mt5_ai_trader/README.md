@@ -1105,6 +1105,46 @@ Python側はMT5 APIを直接使わない設計(EAが書き出すJSONファイル
 - 一致率は数日分のログでも参考になるが、仮想損益の優劣判定には数週間分の
   ログ(母数)が必要(Fable5の指摘通り)。
 
+## 条件別エッジ監査(Phase 16.5)
+
+`backtest_replay.py`(Phase 16.3)の初回検証(USDJPY M15 5000本)で、
+**どの`REQUIRED_SCORE`でも損益分岐(RR1:2なら勝率33.3%)を割り、かつ閾値を
+上げても勝率が改善しない(各閾値でエントリー件数がほぼ同一=閾値が実質
+効いていない)** ことが判明した。これは閾値の調整不足ではなく、採点して
+いる条件そのものが予測力を持っていない可能性を示す。原因を条件レベルまで
+切り分けるのが`backtest_audit.py`(2026-07、Fable5との相談を踏まえて追加)。
+
+```
+.venv/bin/python backtest_audit.py --candles-file artemis_history_USDJPY_M15.json
+.venv/bin/python backtest_audit.py --candles-file artemis_history_USDJPY_M15.json \
+    --spread-points 15 --all-conditions
+```
+
+出力:
+
+1. **スコア分布**: 全バーのBUY/SELL合計スコアのヒストグラム。二極化して
+   いれば「スコアの段階」が幻想(条件間の強い相関)だった直接証拠。
+2. **ベースライン**: 全バーでH1トレンド方向へ無条件エントリーした場合の
+   成績(ランダム基準線)。各条件がこれを上回るか下回るかで、その条件の
+   価値を判断する。**ベースラインを下回る条件は、絞るどころか成績を
+   悪化させている**(反転利用の検討対象)。
+3. **単一条件バックテスト**: 各条件を唯一のエントリー根拠として個別に回し、
+   どの条件に単独のエッジがあるかを勝率順に序列化する。
+4. **分位分析**: 連続指標(RSI/EMA乖離/ATR/MACDヒストグラム)を5分位に区切り、
+   各分位からのエントリー成績の単調性を見る(例: RSIが低い分位ほど勝ち
+   やすいなら逆張り的なエッジがある)。
+5. 1〜4を**ADXレジーム(トレンド/レンジ)別**にも分けて出力。
+
+- 決済は`backtest_replay.py`と同じSL/TP先着方式。全分析で「各バーから
+  そのバーの終値でエントリーした独立試行」として集計する(各シグナルの
+  単独のエッジを測るのが目的)。各バーのBUY/SELL両方向のforward結果は
+  1度だけ事前計算してキャッシュする。
+- 条件評価は`ai_engine.RuleBasedAIEngine.evaluate_conditions()`を使い、
+  本番の`decide()`と完全に同じ計算。`--spread-points`で往復スプレッドを
+  損益から引ける(Phase 16.3の初回結果はスプレッド未考慮のため、実態は
+  そこからさらに悪い)。`--all-conditions`で現在オフの条件
+  (REQUIRE_TRENDING_REGIME等)も監査対象に含められる。
+
 ## テスト(Windows以外でも実行可能)
 
 `indicators.py` や `ai_engine.py`、`market_feed.py`、`order_executor.py`

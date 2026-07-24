@@ -413,6 +413,38 @@ def test_get_shadow_engine_uses_gemini_even_when_ai_engine_is_rule_based(monkeyp
     assert isinstance(engine._inner, GeminiEngine)
 
 
+# --- evaluate_conditions (バックテスト条件別監査用) --------------------------
+
+
+def test_evaluate_conditions_returns_label_bool_pairs_matching_score():
+    """evaluate_conditions()が返す(ラベル, 成否)のリストは、decide()内部の
+    採点(score/total)と完全に一致する(同じ_build_conditionsを共有)。
+    """
+    df = pd.DataFrame(_bullish_setup_rows())
+    engine = RuleBasedAIEngine()
+
+    conditions = engine.evaluate_conditions(df, "BUY")
+    signal = engine.decide(df)
+
+    assert all(isinstance(label, str) and isinstance(ok, bool) for label, ok in conditions)
+    score = sum(1 for _, ok in conditions if ok)
+    assert score == signal.details["buy_score"]
+    assert len(conditions) == signal.details["buy_total"]
+
+
+def test_evaluate_conditions_buy_and_sell_same_length():
+    df = pd.DataFrame(_bullish_setup_rows())
+    engine = RuleBasedAIEngine()
+    assert len(engine.evaluate_conditions(df, "BUY")) == len(engine.evaluate_conditions(df, "SELL"))
+
+
+def test_evaluate_conditions_empty_when_indicators_missing():
+    engine = RuleBasedAIEngine()
+    assert engine.evaluate_conditions(pd.DataFrame(), "BUY") == []
+    # closeはあるがema等が無いDataFrame
+    assert engine.evaluate_conditions(pd.DataFrame([{"close": 150.0}]), "BUY") == []
+
+
 # --- describe_market_conditions ---------------------------------------------
 
 

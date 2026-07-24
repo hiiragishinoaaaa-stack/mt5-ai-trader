@@ -242,15 +242,21 @@ def simulate_trade_forward(
     tp_points: float,
     point_size: float,
     optimistic_fill: bool = False,
+    spread_points: float = 0.0,
 ) -> ReplayTrade:
     """directionでentry_priceに1件エントリーしたと仮定し、bars_after
     (エントリー後のバー、(index, time, high, low)のタプル列、古い順)に
     沿ってSL/TP先着方式で決済まで進める。決済に至らなければ
     reason="still_open"のまま返す。
 
+    spread_points(往復スプレッド、既定0)は決済したトレードのpnl_pointsから
+    差し引く(エントリーはask、決済はbidという往復のスプレッドコストの
+    近似。ローソク足はmid/bid基準の1系列しか無いため、往復1回分を一律に
+    引く簡略化)。決済に至らなかった建玉(still_open)には適用しない。
+
     simulate()(スコア閾値に基づく連続エントリーのシミュレーション)と
-    gemini_shadow_report.py(個別の1判断に対する仮想損益の計算)の両方から
-    使う共通処理。
+    gemini_shadow_report.py/backtest_audit.py(個別の1判断に対する仮想損益の
+    計算)の共通処理。
     """
     is_buy = direction == "BUY"
     trade = ReplayTrade(direction=direction, entry_index=entry_index, entry_time=entry_time, entry_price=entry_price)
@@ -264,7 +270,7 @@ def simulate_trade_forward(
         trade.exit_time = time
         trade.exit_price = exit_price
         trade.reason = reason
-        trade.pnl_points = pnl_price / point_size
+        trade.pnl_points = pnl_price / point_size - spread_points
         break
     return trade
 
@@ -276,12 +282,15 @@ def simulate(
     tp_points: float,
     point_size: float,
     optimistic_fill: bool = False,
+    spread_points: float = 0.0,
 ) -> ReplayResult:
     """事前計算済みのバーごとのスコア(compute_bar_scores)に対して、
     指定したrequired_scoreでエントリーし、SL_POINTS/TP_POINTSの固定幅・
     先着方式で決済する(モジュールdocstring「決済判定の簡略化」参照)。
 
-    optimistic_fill=Falseが既定(SL優先、保守的な見積もり)。
+    optimistic_fill=Falseが既定(SL優先、保守的な見積もり)。spread_pointsは
+    決済したトレードのpnlから往復スプレッド分を引く(simulate_trade_forward
+    参照、既定0=未考慮)。
     """
     result = ReplayResult(required_score=required_score)
     open_trade: ReplayTrade | None = None
@@ -299,7 +308,7 @@ def simulate(
                 open_trade.exit_time = bar.time
                 open_trade.exit_price = exit_price
                 open_trade.reason = reason
-                open_trade.pnl_points = pnl_price / point_size
+                open_trade.pnl_points = pnl_price / point_size - spread_points
                 open_trade = None
                 continue  # このバーでは決済を優先し、新規エントリーはしない
 
@@ -395,6 +404,13 @@ def main() -> None:
     parser.add_argument("--tp-points", type=float, default=None, help="既定: config.TP_POINTS")
     parser.add_argument("--point-size", type=float, default=None, help="既定: config.POINT_SIZE")
     parser.add_argument(
+        "--spread-points",
+        type=float,
+        default=0.0,
+        help="往復スプレッド(points)。決済したトレードのpnlから差し引く(既定0=未考慮。"
+        "実運用ではスプレッド分だけ成績が悪化するため、実態に近づけたい場合に指定する)",
+    )
+    parser.add_argument(
         "--optimistic-fill",
         action="store_true",
         help="同じバーでSL/TP両方に触れた場合、TPを優先する(既定はSLを優先する保守的な見積もり)",
@@ -433,7 +449,10 @@ def main() -> None:
     print(f"{len(bar_scores)}バー分のスコアを計算しました。REQUIRED_SCOREごとに決済シミュレーションしています...\n")
 
     results = [
-        simulate(bar_scores, n, sl_points, tp_points, point_size, optimistic_fill=args.optimistic_fill)
+        simulate(
+            bar_scores, n, sl_points, tp_points, point_size,
+            optimistic_fill=args.optimistic_fill, spread_points=args.spread_points,
+        )
         for n in args.required_scores
     ]
     _print_report(results)
