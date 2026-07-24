@@ -127,6 +127,24 @@ AI_STATUS_FILE_PATH = Path(_ai_status_file_path_env) if _ai_status_file_path_env
 # LOOP_INTERVAL_SECONDSより十分大きい値にすること(既定60秒ループに対し120秒)。
 AI_STATUS_MAX_STALENESS_SECONDS = _env_int("AI_STATUS_MAX_STALENESS_SECONDS", 120)
 
+# AI_STATUS_FILE_PATHは最新1件だけを毎回上書きするため、過去の判断は
+# 消えてしまい、REQUIRED_SCOREをどの値にすべきかを後から実測で検証
+# できなかった(2026-07、Fable5との相談を踏まえて追加)。こちらは毎サイクル
+# 追記(JSON Lines、1行1判断)する履歴ログで、ai_status.append_decision_log
+# が書き出す。ai_status_file_pathと同様、複数銘柄対応のため銘柄ごとに
+# 別ファイル(decision_log_file_path参照)。
+_ai_decision_log_path_env = os.getenv("AI_DECISION_LOG_PATH")
+AI_DECISION_LOG_PATH = (
+    Path(_ai_decision_log_path_env) if _ai_decision_log_path_env else BASE_DIR / "logs" / "ai_decisions.jsonl"
+)
+
+# Geminiシャドーモード(GEMINI_SHADOW参照)の「ルール判断 vs Gemini判断」
+# 履歴ログ(JSON Lines、毎サイクル追記)。
+_ai_shadow_log_path_env = os.getenv("AI_SHADOW_LOG_PATH")
+AI_SHADOW_LOG_PATH = (
+    Path(_ai_shadow_log_path_env) if _ai_shadow_log_path_env else BASE_DIR / "logs" / "ai_shadow_log.jsonl"
+)
+
 # --- 発注(Phase2) ---
 # ENABLE_ORDERSとDEMO_ONLYの両方が明示的にtrueの場合のみ発注リクエストを
 # 書き出す(既定はどちらもfalse)。ENABLE_ORDERSは「発注そのものを行うか」、
@@ -246,6 +264,14 @@ def ea_config_file_path(symbol: str) -> Path:
 
 def ai_status_file_path(symbol: str) -> Path:
     return _for_symbol(AI_STATUS_FILE_PATH, symbol)
+
+
+def decision_log_file_path(symbol: str) -> Path:
+    return _for_symbol(AI_DECISION_LOG_PATH, symbol)
+
+
+def shadow_log_file_path(symbol: str) -> Path:
+    return _for_symbol(AI_SHADOW_LOG_PATH, symbol)
 
 
 # --- 発注テスト用モード ---
@@ -421,6 +447,19 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 AI_ENGINE_TIMEOUT_SECONDS = _env_int("AI_ENGINE_TIMEOUT_SECONDS", 20)
+
+# --- Geminiシャドーモード(2026-07、Fable5との相談を踏まえて追加) ---
+# AI_ENGINEを切り替えると判断ロジックが丸ごと入れ替わり、その後成績が
+# 変わっても「スコア制のおかげ/せい」なのか「Geminiのおかげ/せい」なのか
+# 検証できなくなる(変更は1回に1つが検証の鉄則)。GEMINI_SHADOW=trueに
+# すると、実際の発注判断はAI_ENGINE(既定rule_based)のまま変えず、同じ
+# 入力に対してGeminiにも並行してBUY/SELL/WAITを判定させ、結果は発注に
+# 使わずログ(ai_status.append_shadow_log)とai_status(Dashboard表示用)に
+# だけ記録する。これにより本番挙動を一切変えずに、Geminiとの一致率・
+# Geminiに従っていた場合の仮想成績を無料枠のコストだけで貯められる
+# (GEMINI_API_KEY必須、CandleThrottledEngineで通常のGeminiエンジン利用時
+# と同じコスト対策がかかる)。
+GEMINI_SHADOW = _env_bool("GEMINI_SHADOW", False)
 
 # --- 実行制御 ---
 LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 60)

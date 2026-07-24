@@ -12,6 +12,7 @@ from ai_engine import (
     Signal,
     describe_market_conditions,
     get_ai_engine,
+    get_shadow_engine,
     parse_llm_signal_json,
 )
 
@@ -99,6 +100,35 @@ def test_decide_returns_sell_on_bearish_setup():
     signal = engine.decide(df)
     assert signal.action == "SELL"
     assert signal.details["score"] == 10
+
+
+def test_decide_always_includes_both_direction_score_breakdown_on_buy():
+    """2026-07、Fable5との相談を踏まえた変更: 実際に発動した方向(BUY)
+    だけでなく、発動しなかった方向(SELL)のスコア内訳もdetailsに残る
+    (ai_status.append_decision_logでの閾値バックテスト分析用)。
+    """
+    df = pd.DataFrame(_bullish_setup_rows())
+    engine = RuleBasedAIEngine()
+    signal = engine.decide(df)
+    assert signal.action == "BUY"
+    assert signal.details["buy_score"] == 10
+    assert signal.details["buy_total"] == 10
+    assert signal.details["buy_failed"] == []
+    assert signal.details["sell_score"] is not None
+    assert signal.details["sell_total"] is not None
+    assert isinstance(signal.details["sell_failed"], list)
+    assert signal.details["required_score"] == config.REQUIRED_SCORE
+
+
+def test_decide_always_includes_both_direction_score_breakdown_on_wait():
+    df = pd.DataFrame([_row(ema_fast=151.0, ema_slow=150.0, macd_hist=-0.5, rsi=90.0)])
+    engine = RuleBasedAIEngine()
+    signal = engine.decide(df)
+    assert signal.action == "WAIT"
+    assert signal.details["buy_score"] == 3
+    assert signal.details["sell_score"] == 3
+    assert signal.details["buy_total"] == 8
+    assert signal.details["sell_total"] == 8
 
 
 def test_decide_returns_wait_when_score_far_below_threshold():
@@ -349,6 +379,36 @@ def test_get_ai_engine_returns_gemini_engine_wrapped_in_throttle():
     from gemini_engine import GeminiEngine
 
     engine = get_ai_engine("gemini")
+    assert isinstance(engine, CandleThrottledEngine)
+    assert isinstance(engine._inner, GeminiEngine)
+
+
+# --- get_shadow_engine (GEMINI_SHADOW) ---------------------------------------
+
+
+def test_get_shadow_engine_returns_none_by_default(monkeypatch):
+    monkeypatch.setattr(config, "GEMINI_SHADOW", False)
+    assert get_shadow_engine() is None
+
+
+def test_get_shadow_engine_returns_gemini_engine_wrapped_in_throttle_when_enabled(monkeypatch):
+    from gemini_engine import GeminiEngine
+
+    monkeypatch.setattr(config, "GEMINI_SHADOW", True)
+    engine = get_shadow_engine()
+    assert isinstance(engine, CandleThrottledEngine)
+    assert isinstance(engine._inner, GeminiEngine)
+
+
+def test_get_shadow_engine_uses_gemini_even_when_ai_engine_is_rule_based(monkeypatch):
+    """AI_ENGINE(実際の発注判断)がrule_based(既定)のままでも、シャドー
+    判断は常にGeminiで行う(config.GEMINI_SHADOWはAI_ENGINEと独立)。
+    """
+    monkeypatch.setattr(config, "AI_ENGINE", "rule_based")
+    monkeypatch.setattr(config, "GEMINI_SHADOW", True)
+    from gemini_engine import GeminiEngine
+
+    engine = get_shadow_engine()
     assert isinstance(engine, CandleThrottledEngine)
     assert isinstance(engine._inner, GeminiEngine)
 

@@ -174,6 +174,14 @@ export function TradingSettings() {
                 "を設定していない場合、常にWAITになります"}
           </span>
         </div>
+        {draft.AI_ENGINE !== "gemini" ? (
+          <ToggleRow
+            label="Gemini Shadow Mode"
+            description="発注判断は上の判断エンジンのまま変えず、同じ入力でGeminiにも並行判定させてログ・AI Judgementカードに記録するだけ(発注には使わない)。比較検証用。GEMINI_API_KEYが.envに必要"
+            checked={draft.GEMINI_SHADOW}
+            onChange={(v) => updateDraft({ GEMINI_SHADOW: v })}
+          />
+        ) : null}
         <div className="border-b border-border py-3 first:pt-0">
           <PillGroup
             label="Entry Strictness"

@@ -167,6 +167,7 @@ FIELDS: dict[str, FieldSpec] = {
     "DISCORD_NOTIFY_DAILY_SUMMARY": FieldSpec("DISCORD_NOTIFY_DAILY_SUMMARY", bool),
     "BOT_RUN_STATE": FieldSpec("BOT_RUN_STATE", str, choices=BOT_RUN_STATE_CHOICES),
     "AI_ENGINE": FieldSpec("AI_ENGINE", str, choices=AI_ENGINE_CHOICES),
+    "GEMINI_SHADOW": FieldSpec("GEMINI_SHADOW", bool),
     "ENABLED_SYMBOLS": FieldSpec("ENABLED_SYMBOLS", list, choices=AVAILABLE_SYMBOLS),
 }
 

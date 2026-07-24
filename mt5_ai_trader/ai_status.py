@@ -31,9 +31,10 @@ class AiStatusSnapshot:
     required_score: int | None = None
     failed_required: dict[str, list[str]] | None = None
     adx: float | None = None
+    gemini_shadow: dict | None = None
 
 
-def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
+def write_status(signal: Signal, symbol: str, timeframe: str, shadow_signal: Signal | None = None) -> None:
     """main.pyの各サイクルの最後に呼び出し、最新の判断を書き出す。
 
     複数銘柄対応(Phase 12)により、銘柄ごとに別ファイル(config.
@@ -45,6 +46,11 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
     Dashboardが構造化して表示できるようにする。RuleBasedAIEngine以外
     (LLM系エンジン等)ではdetailsに含まれないため、その場合はnull。
     adxも同様(診断用。売買判断にはまだ使っていない、ai_engine.py参照)。
+
+    shadow_signal(config.GEMINI_SHADOW=true時のみ、ai_engine.
+    get_shadow_engine参照)を渡すと、実際の発注判断(signal)とは別に
+    「Geminiならどう判断したか」もgemini_shadowとしてDashboardへ表示
+    できるように書き出す(発注には一切使わない、記録のみ)。
     """
     payload = {
         "action": signal.action,
@@ -57,6 +63,15 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
         "required_score": signal.details.get("required_score"),
         "failed_required": signal.details.get("failed_required") or None,
         "adx": signal.details.get("adx"),
+        "gemini_shadow": (
+            {
+                "action": shadow_signal.action,
+                "confidence": shadow_signal.confidence,
+                "reason": shadow_signal.reason,
+            }
+            if shadow_signal is not None
+            else None
+        ),
     }
     file_path = config.ai_status_file_path(symbol)
     tmp_path = file_path.with_suffix(".tmp")
@@ -64,6 +79,75 @@ def write_status(signal: Signal, symbol: str, timeframe: str) -> None:
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
     tmp_path.replace(file_path)
+
+
+def append_decision_log(signal: Signal, symbol: str, timeframe: str) -> None:
+    """毎サイクルの判断を追記専用ログ(JSON Lines)へ残す。
+
+    write_status()は最新1件だけを毎回上書きするため、REQUIRED_SCOREを
+    どの値にすべきかを後から実測で検証する材料が残らなかった(2026-07、
+    Fable5との相談を踏まえて追加)。こちらはBUY/SELL両方向のスコア内訳
+    (ai_engine.RuleBasedAIEngine.decideが常にdetailsへ含めるようになった
+    buy_score/buy_total/buy_failed/sell_score/sell_total/sell_failed)を
+    1行1JSONで追記していく。RuleBasedAIEngine以外(LLM系エンジン等)では
+    該当キーがdetailsに無いためnullになる。
+
+    書き込み失敗(ディスク容量不足等)は呼び出し元(main.py)でログに
+    残すだけにとどめ、判断・発注フロー自体は止めない設計を踏襲する
+    (write_status関数のdocstring参照)。
+    """
+    payload = {
+        "timestamp": time.time(),
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "action": signal.action,
+        "confidence": signal.confidence,
+        "reason": signal.reason,
+        "required_score": signal.details.get("required_score"),
+        "buy_score": signal.details.get("buy_score"),
+        "buy_total": signal.details.get("buy_total"),
+        "buy_failed": signal.details.get("buy_failed"),
+        "sell_score": signal.details.get("sell_score"),
+        "sell_total": signal.details.get("sell_total"),
+        "sell_failed": signal.details.get("sell_failed"),
+        "adx": signal.details.get("adx"),
+        "regime": signal.details.get("regime"),
+    }
+    file_path = config.decision_log_file_path(symbol)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False))
+        f.write("\n")
+
+
+def append_shadow_log(rule_signal: Signal, shadow_signal: Signal, symbol: str, timeframe: str, price: float | None) -> None:
+    """Geminiシャドーモード(config.GEMINI_SHADOW)の「ルール判断 vs Gemini
+    判断」を追記専用ログ(JSON Lines)へ残す。
+
+    実際の発注判断(rule_signal)とGeminiの判断(shadow_signal、発注には
+    一切使わない)を1行に並べて記録する。priceはその足のclose(判断時点の
+    参考価格)で、後から「もしGeminiに従っていたら」の仮想損益を計算する際に
+    その後の値動きと突き合わせるために残す(このログ自体は仮想損益の集計
+    までは行わない、生データのみ)。
+    """
+    payload = {
+        "timestamp": time.time(),
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "price": price,
+        "rule_action": rule_signal.action,
+        "rule_score": rule_signal.details.get("score"),
+        "rule_required_score": rule_signal.details.get("required_score"),
+        "gemini_action": shadow_signal.action,
+        "gemini_confidence": shadow_signal.confidence,
+        "gemini_reason": shadow_signal.reason,
+        "agree": rule_signal.action == shadow_signal.action,
+    }
+    file_path = config.shadow_log_file_path(symbol)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False))
+        f.write("\n")
 
 
 def read_status(symbol: str, max_staleness_seconds: float | None = None) -> AiStatusSnapshot:
@@ -109,6 +193,7 @@ def read_status(symbol: str, max_staleness_seconds: float | None = None) -> AiSt
             required_score=payload.get("required_score"),
             failed_required=payload.get("failed_required"),
             adx=payload.get("adx"),
+            gemini_shadow=payload.get("gemini_shadow"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise AiStatusError(f"AI判断ファイルの形式が不正です: {exc}") from exc

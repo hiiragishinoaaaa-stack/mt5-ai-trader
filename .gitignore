@@ -173,6 +173,13 @@ mt5_ai_trader/artemis_ea_config.json
 # (config._for_symbol()参照)。新しい銘柄をAVAILABLE_SYMBOLSに追加した
 # 場合はここにもパターンを追加すること。
 mt5_ai_trader/artemis_*_eurusd.json
+# ARTEMIS: main.pyが各サイクルで追記するAI判断履歴ログ(ai_status.
+# append_decision_log、閾値のバックテスト分析用)。プライマリ銘柄以外は
+# ai_decisions_<銘柄名小文字>.jsonlという別ファイルになる。
+mt5_ai_trader/logs/ai_decisions*.jsonl
+# ARTEMIS: Geminiシャドーモード(GEMINI_SHADOW)の「ルール判断 vs Gemini
+# 判断」履歴ログ(ai_status.append_shadow_log)。
+mt5_ai_trader/logs/ai_shadow_log*.jsonl
 .venv
 env/
 venv/

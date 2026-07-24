@@ -5,6 +5,8 @@ MT5/EA/実ファイルシステムは使わず、resolve_force_signal() / apply_
 """
 from __future__ import annotations
 
+import json
+
 import config
 import main as main_module
 from ai_engine import Signal
@@ -462,3 +464,88 @@ def test_run_once_atr_price_is_none_when_high_low_unavailable(monkeypatch):
     assert len(order_executor.calls) == 1
     _, _, atr_price = order_executor.calls[0]
     assert atr_price is None
+
+
+# --- Geminiシャドーモード(GEMINI_SHADOW) -------------------------------------
+
+
+class _FakeShadowEngine:
+    def __init__(self, signal=None, error=False):
+        self.calls = 0
+        self._signal = signal or Signal("SELL", "シャドーの判断理由", {}, confidence=75)
+        self._error = error
+
+    def decide(self, df):
+        self.calls += 1
+        if self._error:
+            raise RuntimeError("shadow engine boom")
+        return self._signal
+
+
+def _patch_ai_status_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "AI_STATUS_FILE_PATH", tmp_path / "artemis_ai_status.json")
+    monkeypatch.setattr(config, "AI_DECISION_LOG_PATH", tmp_path / "ai_decisions.jsonl")
+    monkeypatch.setattr(config, "AI_SHADOW_LOG_PATH", tmp_path / "ai_shadow_log.jsonl")
+
+
+def test_run_once_records_shadow_signal_without_affecting_order(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    _patch_ai_status_paths(monkeypatch, tmp_path)
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()  # 常にWAIT
+    order_executor = _RecordingOrderExecutor()
+    shadow_engine = _FakeShadowEngine(Signal("SELL", "シャドーの判断理由", {}, confidence=75))
+
+    signal = main_module.run_once(feed, ai_engine, order_executor, shadow_engine=shadow_engine)
+
+    assert signal is not None
+    assert signal.action == "WAIT"  # 実際の発注判断はルールベースのまま変わらない
+    assert shadow_engine.calls == 1
+    assert order_executor.calls[0][0].action == "WAIT"  # 発注にはシャドー判断を使わない
+
+    shadow_log_path = config.shadow_log_file_path(config.SYMBOL)
+    lines = shadow_log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["rule_action"] == "WAIT"
+    assert row["gemini_action"] == "SELL"
+    assert row["agree"] is False
+
+    status_payload = json.loads(config.ai_status_file_path(config.SYMBOL).read_text(encoding="utf-8"))
+    assert status_payload["action"] == "WAIT"
+    assert status_payload["gemini_shadow"]["action"] == "SELL"
+    assert status_payload["gemini_shadow"]["confidence"] == 75
+
+
+def test_run_once_without_shadow_engine_writes_no_shadow_log(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    _patch_ai_status_paths(monkeypatch, tmp_path)
+    feed = _FakeFeed()
+    ai_engine = _FakeAiEngine()
+    order_executor = _RecordingOrderExecutor()
+
+    main_module.run_once(feed, ai_engine, order_executor)  # shadow_engine省略(既定None)
+
+    assert not config.shadow_log_file_path(config.SYMBOL).exists()
+    status_payload = json.loads(config.ai_status_file_path(config.SYMBOL).read_text(encoding="utf-8"))
+    assert status_payload["gemini_shadow"] is None
+
+
+def test_run_once_shadow_engine_error_does_not_break_main_flow(monkeypatch, tmp_path):
+    """シャドーエンジンが例外を投げても、本来のAI判断・発注は通常通り行われる
+    (記録のみに影響、という設計。_run_symbol_cycleのdocstring参照)。
+    """
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    _patch_ai_status_paths(monkeypatch, tmp_path)
+    feed = _FakeFeed()
+    ai_engine = _BuySignalAiEngine()
+    order_executor = _RecordingOrderExecutor()
+    shadow_engine = _FakeShadowEngine(error=True)
+
+    signal = main_module.run_once(feed, ai_engine, order_executor, shadow_engine=shadow_engine)
+
+    assert signal is not None
+    assert signal.action == "BUY"
+    assert len(order_executor.calls) == 1
+    assert order_executor.calls[0][0].action == "BUY"
+    assert not config.shadow_log_file_path(config.SYMBOL).exists()

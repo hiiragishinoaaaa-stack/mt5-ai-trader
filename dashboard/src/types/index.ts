@@ -74,6 +74,10 @@ export interface TradingSettings {
   DISCORD_NOTIFY_DAILY_SUMMARY: boolean;
   BOT_RUN_STATE: BotRunState;
   AI_ENGINE: AiEngineChoice;
+  // AI_ENGINEはrule_basedのまま、同じ入力でGeminiにも並行してBUY/SELL/WAIT
+  // を判定させ、発注には使わずログ・Dashboard表示にだけ記録する
+  // (RealAiStatus.gemini_shadow参照)。GEMINI_API_KEYが.envに必要。
+  GEMINI_SHADOW: boolean;
   ENABLED_SYMBOLS: AvailableSymbol[];
   // --- スコアリング方式のエントリー条件(RuleBasedAIEngine) ---
   RSI_PERIOD: number;
@@ -156,6 +160,9 @@ export interface RealAiStatus {
   required_score: number | null;
   // 必須条件が未達だった場合の、方向ごとの弾かれた条件名一覧。
   failed_required: { BUY: string[]; SELL: string[] } | null;
+  // Geminiシャドーモード(GEMINI_SHADOW=true)の場合のみ、Geminiが同じ入力で
+  // 判定した結果(発注には使われていない、記録のみ)。無効時はnull。
+  gemini_shadow: { action: AiAction; confidence: number; reason: string } | null;
 }
 
 // --- 実際にPython側(trade_history_feed.py経由でEAが書き出すJSON)から

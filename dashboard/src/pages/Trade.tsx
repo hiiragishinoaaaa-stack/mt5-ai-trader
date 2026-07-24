@@ -207,6 +207,26 @@ export function TradePage() {
                         ) : null}
                       </div>
                     ) : null}
+                    {entry.aiStatus.gemini_shadow ? (
+                      <div className="flex items-center gap-2 border-t border-border pt-2 text-xs">
+                        <span className="text-ink-faint">Gemini(shadow)</span>
+                        <Badge
+                          tone={
+                            entry.aiStatus.gemini_shadow.action === "BUY"
+                              ? "profit"
+                              : entry.aiStatus.gemini_shadow.action === "SELL"
+                                ? "loss"
+                                : "neutral"
+                          }
+                        >
+                          {entry.aiStatus.gemini_shadow.action}
+                        </Badge>
+                        <span className="text-ink-faint">{entry.aiStatus.gemini_shadow.confidence}%</span>
+                        {entry.aiStatus.gemini_shadow.action !== entry.aiStatus.action ? (
+                          <span className="text-ink-faint">(実際の判断と不一致)</span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </Card>
                 ) : null}
               </div>

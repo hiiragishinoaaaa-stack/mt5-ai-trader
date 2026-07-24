@@ -79,7 +79,7 @@ import ea_config_writer
 import indicators
 import risk_manager
 from account_feed import FileAccountFeed
-from ai_engine import Signal, get_ai_engine
+from ai_engine import Signal, get_ai_engine, get_shadow_engine
 from logger import setup_logger
 from market_feed import FileMarketFeed, MarketFeedError
 from order_executor import FileOrderExecutor, generate_request_id
@@ -144,6 +144,7 @@ def _run_symbol_cycle(
     request_id: str | None,
     history_feed: FileTradeHistoryFeed,
     account_feed: FileAccountFeed,
+    shadow_engine=None,
 ) -> Signal | None:
     """1銘柄分のデータ取得 → 指標計算 → AI判断 → (必要ならrisk_managerで
     許可を確認した上で発注) を行う。
@@ -152,12 +153,29 @@ def _run_symbol_cycle(
     銘柄それぞれについてこの関数を呼び出す。データ取得や判断、発注の
     どこで例外が起きても、ここで捕捉してログに残し、他の銘柄の処理や
     呼び出し元(ループ)を止めない。
+
+    shadow_engine(config.GEMINI_SHADOW=true時のみ、ai_engine.
+    get_shadow_engine参照)が渡された場合、実際の発注判断(ai_engine側)
+    とは別にGeminiにも同じ入力で判断させ、結果をログ・Dashboard表示用に
+    記録する(発注には一切使わない)。シャドー判断でのエラーは記録を
+    諦めるだけで、本来のAI判断・発注フローには一切影響させない。
     """
     try:
         snapshot = feed.read_snapshot(symbol, config.TIMEFRAME)
         enriched = indicators.add_indicators(snapshot.candles)
         signal = ai_engine.decide(enriched)
         signal = apply_force_signal(signal, force_signal)
+
+        shadow_signal: Signal | None = None
+        if shadow_engine is not None:
+            try:
+                shadow_signal = shadow_engine.decide(enriched)
+            except Exception:
+                logger.exception(
+                    "[%s] Geminiシャドー判断中にエラーが発生しました(記録のみに影響、"
+                    "本来のAI判断・発注は通常通り続行します)",
+                    symbol,
+                )
 
         atr_price: float | None = None
         if "atr" in enriched.columns:
@@ -192,9 +210,21 @@ def _run_symbol_cycle(
         logger.debug("signal details: %s", signal.details)
 
         try:
-            ai_status.write_status(signal, symbol, config.TIMEFRAME)
+            ai_status.write_status(signal, symbol, config.TIMEFRAME, shadow_signal=shadow_signal)
         except OSError:
             logger.exception("AI判断ファイルの書き出しに失敗しました(Dashboard表示のみに影響)")
+
+        try:
+            ai_status.append_decision_log(signal, symbol, config.TIMEFRAME)
+        except OSError:
+            logger.exception("AI判断履歴ログの追記に失敗しました(閾値分析用ログのみに影響)")
+
+        if shadow_signal is not None:
+            try:
+                latest_close = float(enriched.iloc[-1]["close"]) if "close" in enriched.columns else None
+                ai_status.append_shadow_log(signal, shadow_signal, symbol, config.TIMEFRAME, latest_close)
+            except OSError:
+                logger.exception("Geminiシャドーログの追記に失敗しました(記録のみに影響)")
 
         order_executor.submit_if_needed(signal, symbol, atr_price=atr_price, request_id=request_id)
 
@@ -215,6 +245,7 @@ def run_once(
     request_id: str | None = None,
     trade_history_feed: FileTradeHistoryFeed | None = None,
     account_feed: FileAccountFeed | None = None,
+    shadow_engine=None,
 ) -> Signal | None:
     """1回分のサイクルを実行する(config.ENABLED_SYMBOLSの銘柄それぞれについて
     データ取得 → 指標計算 → AI判断 → (必要なら発注) → ログ出力を行う)。
@@ -228,6 +259,9 @@ def run_once(
     戻り値はプライマリ銘柄(config.SYMBOL)のSignal(他の有効銘柄の判断は
     副作用としてai_status/発注リクエストに反映されるのみで、戻り値には
     含まれない。TEST_ORDER_ONCE等の既存の呼び出し元との後方互換のため)。
+
+    shadow_engine(ai_engine.get_shadow_engine参照)は_run_symbol_cycleへ
+    そのまま渡す(Geminiシャドーモード、config.GEMINI_SHADOW参照)。
     """
     if config.load_config_json():
         logger.info(
@@ -289,7 +323,15 @@ def run_once(
     primary_signal: Signal | None = None
     for symbol in config.ENABLED_SYMBOLS:
         signal = _run_symbol_cycle(
-            feed, ai_engine, order_executor, symbol, force_signal, request_id, history_feed, acct_feed
+            feed,
+            ai_engine,
+            order_executor,
+            symbol,
+            force_signal,
+            request_id,
+            history_feed,
+            acct_feed,
+            shadow_engine=shadow_engine,
         )
         if symbol == config.SYMBOL:
             primary_signal = signal
@@ -373,6 +415,13 @@ def main() -> None:
 
     feed = FileMarketFeed()
     ai_engine = get_ai_engine()
+    shadow_engine = get_shadow_engine()
+    if shadow_engine is not None:
+        logger.info(
+            "Geminiシャドーモードが有効です(GEMINI_SHADOW=true)。実際の発注判断はAI_ENGINE=%sのまま、"
+            "Geminiの判断はログ・Dashboardへの記録のみに使います。",
+            config.AI_ENGINE,
+        )
     order_executor = FileOrderExecutor()
 
     exit_code = 0
@@ -382,7 +431,14 @@ def main() -> None:
             # 同じIDを使い回すことで、万一この呼び出しが二重に実行されても
             # order_executor側のガードにより二重発注にならない。
             request_id = generate_request_id() if test_order_once else None
-            signal = run_once(feed, ai_engine, order_executor, force_signal=force_signal, request_id=request_id)
+            signal = run_once(
+                feed,
+                ai_engine,
+                order_executor,
+                force_signal=force_signal,
+                request_id=request_id,
+                shadow_engine=shadow_engine,
+            )
             if signal is None:
                 exit_code = 1
         else:
@@ -398,7 +454,7 @@ def main() -> None:
                     config.LOOP_INTERVAL_SECONDS,
                 )
             while True:
-                run_once(feed, ai_engine, order_executor, force_signal=force_signal)
+                run_once(feed, ai_engine, order_executor, force_signal=force_signal, shadow_engine=shadow_engine)
                 # run_once()内でconfig.jsonの再読込は既に行われているため、
                 # ここでは最新のconfig.LOOP_INTERVAL_SECONDSを参照するだけ。
                 interval = resolve_loop_interval(args.interval)

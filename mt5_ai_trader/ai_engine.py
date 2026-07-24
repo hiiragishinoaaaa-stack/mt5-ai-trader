@@ -161,14 +161,29 @@ class RuleBasedAIEngine(AIEngine):
         buy_qualifies = buy_score >= required_score
         sell_qualifies = sell_score >= required_score
 
+        # 常にBUY/SELL両方向のスコア内訳をdetailsへ残す(2026-07、Fable5との
+        # 相談を踏まえて追加。以前は実際に発動した方向以外・WAIT以外の内訳が
+        # 残らず、後から「REQUIRED_SCOREをNにしていたらこの足はどう判断
+        # されていたか」を再現できなかった。ai_status.append_decision_log
+        # 参照、閾値のバックテスト分析用)。
+        details.update(
+            buy_score=buy_score,
+            buy_total=buy_total,
+            buy_failed=buy_failed,
+            sell_score=sell_score,
+            sell_total=sell_total,
+            sell_failed=sell_failed,
+            required_score=required_score,
+        )
+
         if buy_qualifies and (not sell_qualifies or buy_score >= sell_score):
             reason = f"スコア{buy_score}/{buy_total}点で必要点数({required_score})に到達"
-            details.update(score=buy_score, required_score=required_score, failed_required=None)
+            details.update(score=buy_score, failed_required=None)
             return Signal("BUY", reason, details, buy_confidence)
 
         if sell_qualifies:
             reason = f"スコア{sell_score}/{sell_total}点で必要点数({required_score})に到達"
-            details.update(score=sell_score, required_score=required_score, failed_required=None)
+            details.update(score=sell_score, failed_required=None)
             return Signal("SELL", reason, details, sell_confidence)
 
         reason = (
@@ -176,11 +191,7 @@ class RuleBasedAIEngine(AIEngine):
             f"(BUY: {buy_score}/{buy_total}点、未達: {', '.join(buy_failed) or 'なし'} / "
             f"SELL: {sell_score}/{sell_total}点、未達: {', '.join(sell_failed) or 'なし'})"
         )
-        details.update(
-            score=max(buy_score, sell_score),
-            required_score=required_score,
-            failed_required={"BUY": buy_failed, "SELL": sell_failed},
-        )
+        details.update(score=max(buy_score, sell_score), failed_required={"BUY": buy_failed, "SELL": sell_failed})
         return Signal("WAIT", reason, details, max(buy_confidence, sell_confidence))
 
     def _spread_ok(self, latest: pd.Series) -> bool:
@@ -522,3 +533,21 @@ def get_ai_engine(engine_name: str | None = None) -> AIEngine:
         return CandleThrottledEngine(GeminiEngine())
 
     return UnavailableAIEngine(name)
+
+
+def get_shadow_engine() -> AIEngine | None:
+    """Geminiシャドーモード(config.GEMINI_SHADOW)用のエンジンを返す。
+
+    config.GEMINI_SHADOW=falseなら常にNone(main.pyはこの場合シャドー
+    判断自体を一切呼ばない)。trueの場合はget_ai_engine("gemini")と全く
+    同じ実体(CandleThrottledEngineで包んだGeminiEngine)を返す。AI_ENGINE
+    (実際の発注判断に使うエンジン)がrule_based以外(例: AI_ENGINE=gemini)
+    であっても、シャドー判断は常にGeminiで行う(現状Gemini以外をシャドー
+    対象にする想定が無いため。将来他のエンジンにも広げる場合はここに
+    分岐を追加する)。main()で1度だけ呼び出し、その1インスタンスを
+    毎サイクル使い回すこと(CandleThrottledEngineのキャッシュが効くのは
+    同一インスタンスを使い続けた場合のみ)。
+    """
+    if not config.GEMINI_SHADOW:
+        return None
+    return get_ai_engine("gemini")
