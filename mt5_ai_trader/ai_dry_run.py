@@ -353,6 +353,145 @@ def summarise(name: str, verdicts: list[Verdict]) -> str:
     return f"{name:<8}{len(traded):>8}{wins:>8}{ev:>+10.3f}{skipped:>10}{failed:>10}"
 
 
+def build_curated_set(
+    candles: pd.DataFrame,
+    point_size: float,
+    bars_count: int,
+    sl_atr_mult: float,
+    rr: float,
+    per_class: int,
+    max_horizon: int = 480,
+    stride: int = 8,
+) -> list[tuple[int, str]]:
+    """結果が分かっている局面を、正解ラベル付きで選び出す。
+
+    ## 何を測る道具か
+
+    ランダムな時点を採点すると、そのほとんどが「どちらとも言えない」局面に
+    なり、AIに読む能力があるのか、それとも局面が読めないだけなのかが混ざる。
+    ここでは後から見れば答えが明らかな局面だけを集めて、**AIにそもそも
+    読む力があるか**を切り分ける。
+
+    ## この結果を実戦成績と読んではいけない
+
+    結果で選んでいる以上、本番の難しさ(大半が曖昧な局面であること)が
+    抜け落ちる。ここで高得点でも、実戦で勝てる根拠にはならない。逆に、
+    明確な局面ですら当たらないなら、入力か形式に問題があると分かる。
+    そこを切り分けるための道具であって、成績表ではない。
+
+    ## 正解ラベル
+
+    SL/TP先着方式で後の値動きを見て、次の3つに分ける。
+
+    - BUY  : 買っていればTPに先に届いた
+    - SELL : 売っていればTPに先に届いた
+    - WAIT : どちらに入ってもSLに先に届いた(手を出すべきでなかった)
+
+    WAITを含めるのが要点で、「入ってはいけない場面を見送れるか」という
+    門番としての能力が、これで初めて直接測れる。
+    """
+    enriched = indicators.add_indicators(candles)
+    scan, n = _make_forward_scanner(candles, max_horizon, optimistic_fill=False)
+    closes = candles["close"].to_numpy(dtype=float)
+
+    buckets: dict[str, list[int]] = {"BUY": [], "SELL": [], "WAIT": []}
+    for i in range(bars_count - 1, n - 1, stride):
+        atr = enriched.iloc[i].get("atr")
+        if atr is None or pd.isna(atr) or atr <= 0:
+            continue
+        sl_px = sl_atr_mult * float(atr)
+        tp_px = rr * sl_px
+        entry = float(closes[i])
+        buy = scan(i, entry + tp_px, entry - sl_px, True)
+        sell = scan(i, entry - tp_px, entry + sl_px, False)
+        if buy < 0 or sell < 0:
+            continue  # 期限内に決着しない局面は答えを決められない
+        if buy == 1 and sell == 0:
+            buckets["BUY"].append(i)
+        elif sell == 1 and buy == 0:
+            buckets["SELL"].append(i)
+        elif buy == 0 and sell == 0:
+            buckets["WAIT"].append(i)
+
+    # 各クラスから時系列に散らして採る(特定の相場つきに偏らせないため)
+    selected: list[tuple[int, str]] = []
+    for label, indexes in buckets.items():
+        if not indexes:
+            continue
+        step = max(1, len(indexes) // per_class)
+        selected += [(idx, label) for idx in indexes[::step][:per_class]]
+    selected.sort()
+    return selected
+
+
+def run_curated(
+    candles: pd.DataFrame,
+    cases: list[tuple[int, str]],
+    engine,
+    engine_name: str,
+    bars_count: int,
+    retries: int,
+    sleep_seconds: float,
+) -> None:
+    """正解付きの局面をAIに解かせ、クラス別の正答率と取り違えを表示する。"""
+    counts: dict[str, int] = {}
+    correct: dict[str, int] = {}
+    confusion: dict[tuple[str, str], int] = {}
+    failed = 0
+
+    for n, (index, answer) in enumerate(cases, start=1):
+        window = candles.iloc[index - bars_count + 1 : index + 1].reset_index(drop=True)
+        enriched = indicators.add_indicators(window)
+        when = pd.Timestamp(candles.iloc[index]["time"]) if "time" in candles.columns else None
+
+        if sleep_seconds > 0 and n > 1:
+            time.sleep(sleep_seconds)
+        signal = call_engine(engine, enriched, retries, max(sleep_seconds, 30.0))
+        if signal.details.get("error"):
+            failed += 1
+            print(f"--- {n}/{len(cases)}  {when}  正解={answer}  → 判断できず(集計から除外)")
+            continue
+
+        counts[answer] = counts.get(answer, 0) + 1
+        hit = signal.action == answer
+        correct[answer] = correct.get(answer, 0) + (1 if hit else 0)
+        confusion[(answer, signal.action)] = confusion.get((answer, signal.action), 0) + 1
+        print(f"--- {n}/{len(cases)}  {when}  正解={answer} / AI={signal.action}  {'○' if hit else '×'}")
+        print(f"      {signal.reason}")
+
+    total = sum(counts.values())
+    if not total:
+        print("\n判断が1件も取れませんでした(APIエラー)。")
+        return
+
+    print(f"\n=== 正答率({engine_name}) ===")
+    print(f"{'正解':<8}{'件数':>6}{'的中':>6}{'正答率':>9}{'まぐれ水準':>12}")
+    for label in ("BUY", "SELL", "WAIT"):
+        if not counts.get(label):
+            continue
+        rate = correct.get(label, 0) / counts[label] * 100
+        print(f"{label:<8}{counts[label]:>6}{correct.get(label, 0):>6}{rate:>8.1f}%{'33.3%':>12}")
+    overall = sum(correct.values()) / total * 100
+    print(f"{'合計':<8}{total:>6}{sum(correct.values()):>6}{overall:>8.1f}%{'33.3%':>12}")
+    if failed:
+        print(f"(APIエラーで除外: {failed}件)")
+
+    print("\n【取り違えの内訳】")
+    for answer in ("BUY", "SELL", "WAIT"):
+        row = [f"{action}={confusion.get((answer, action), 0)}" for action in ("BUY", "SELL", "WAIT")]
+        if counts.get(answer):
+            print(f"  正解{answer}のとき: " + " / ".join(row))
+
+    print(
+        "\n※3択なので、でたらめに答えても33.3%は当たる。見るのはそこからの上振れ。"
+        "\n※これは実戦成績ではない。結果が分かっている局面だけを選んでいるため、"
+        "\n  本番の難しさ(大半が曖昧な局面であること)が抜けている。"
+        "\n  ここで測れるのは『明確な局面をそもそも読めるか』という能力の有無だけ。"
+        "\n  ・33%前後 → 入力か形式に問題がある。材料を変えるべき"
+        "\n  ・明確に上回る → 読む力はある。次はランダム窓との差を見る"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="保存済みの過去データでAI判断エンジンを走らせ、ルール判断と並べて表示する(発注しない)"
@@ -361,6 +500,18 @@ def main() -> None:
         "--list-models",
         action="store_true",
         help="このAPIキーで使えるGeminiモデル名を一覧する(404の切り分け用)。キーは表示しない",
+    )
+    parser.add_argument(
+        "--curated",
+        action="store_true",
+        help="結果が分かっている局面(買うべき/売るべき/手を出すべきでない)を正解付きで"
+        "出題し、AIに読む力があるかを測る。実戦成績ではなく能力の切り分け用",
+    )
+    parser.add_argument(
+        "--per-class",
+        type=int,
+        default=10,
+        help="--curated時、BUY/SELL/WAITそれぞれ何問出すか(既定10=合計30問)",
     )
     parser.add_argument(
         "--probe",
@@ -425,6 +576,27 @@ def main() -> None:
             print(f"警告: --engine {args.engine} にはモデル差し替えの設定がありません。無視します。")
 
     bars_count = args.bars_count or config.BARS_COUNT
+
+    if args.curated:
+        print(f"{args.candles_file} を読み込んでいます...")
+        candles = load_candles(args.candles_file)
+        print("結果が分かっている局面を探しています(数十秒かかります)...")
+        cases = build_curated_set(
+            candles, infer_point_size(candles), bars_count,
+            args.eval_sl_mult, args.eval_rr, args.per_class,
+        )
+        if not cases:
+            print("正解を決められる局面が見つかりませんでした(SL幅か期限を見直してください)。")
+            return
+        by_class: dict[str, int] = {}
+        for _, label in cases:
+            by_class[label] = by_class.get(label, 0) + 1
+        print(f"{len(cases)}問を出題します({by_class})。AIエンジン={args.engine}、発注は一切しません。\n")
+        run_curated(
+            candles, cases, get_ai_engine(args.engine), args.engine,
+            bars_count, args.retries, args.sleep,
+        )
+        return
 
     print(f"{args.candles_file} を読み込んでいます...")
     candles = load_candles(args.candles_file)

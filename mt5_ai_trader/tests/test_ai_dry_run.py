@@ -650,3 +650,93 @@ def test_main_model_override_warns_for_unknown_engine(tmp_path, monkeypatch, cap
     ai_dry_run.main()
 
     assert "モデル差し替えの設定がありません" in capsys.readouterr().out
+
+
+# --- 正解付き出題(--curated) ---------------------------------------------------
+
+
+def _trending_candles(n: int, drift: float) -> pd.DataFrame:
+    """一方向に素直に伸びる系列(BUYまたはSELLが必ず正解になる)。"""
+    rows = []
+    price = 150.0
+    t = 1700000000
+    for _ in range(n):
+        price += drift
+        rows.append(
+            {"time": t, "open": price, "high": price + 0.01, "low": price - 0.01,
+             "close": price, "spread": 2}
+        )
+        t += 900
+    df = pd.DataFrame(rows)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    return df
+
+
+def test_build_curated_set_labels_a_rising_market_as_buy():
+    """上げ続ける相場では、買いがTP先着になるのでBUYが正解になる。"""
+    candles = _trending_candles(600, drift=0.02)
+
+    cases = ai_dry_run.build_curated_set(
+        candles, 0.001, bars_count=100, sl_atr_mult=1.0, rr=1.5, per_class=5
+    )
+
+    assert cases
+    labels = {label for _, label in cases}
+    assert labels == {"BUY"}  # 下落局面もレンジも無いのでBUYだけ
+
+
+def test_build_curated_set_labels_a_falling_market_as_sell():
+    candles = _trending_candles(600, drift=-0.02)
+
+    cases = ai_dry_run.build_curated_set(
+        candles, 0.001, bars_count=100, sl_atr_mult=1.0, rr=1.5, per_class=5
+    )
+
+    assert {label for _, label in cases} == {"SELL"}
+
+
+def test_build_curated_set_caps_each_class_at_per_class():
+    candles = _trending_candles(1200, drift=0.02)
+
+    cases = ai_dry_run.build_curated_set(
+        candles, 0.001, bars_count=100, sl_atr_mult=1.0, rr=1.5, per_class=4
+    )
+
+    assert len(cases) <= 4  # 1クラスしか無い相場なので上限どおり
+
+
+def test_build_curated_set_returns_indexes_in_time_order():
+    candles = _trending_candles(800, drift=0.02)
+
+    cases = ai_dry_run.build_curated_set(
+        candles, 0.001, bars_count=100, sl_atr_mult=1.0, rr=1.5, per_class=6
+    )
+
+    assert [i for i, _ in cases] == sorted(i for i, _ in cases)
+
+
+def test_run_curated_reports_per_class_accuracy(capsys):
+    candles = _trending_candles(600, drift=0.02)
+    cases = [(200, "BUY"), (300, "SELL"), (400, "WAIT")]
+
+    ai_dry_run.run_curated(
+        candles, cases, _StubEngine("BUY"), "stub", bars_count=100, retries=0, sleep_seconds=0
+    )
+
+    out = capsys.readouterr().out
+    assert "正答率" in out
+    assert "取り違えの内訳" in out
+    assert "実戦成績ではない" in out  # 誤読を防ぐ注意書きは必ず出す
+
+
+def test_run_curated_excludes_api_failures_from_accuracy(capsys):
+    candles = _trending_candles(600, drift=0.02)
+    cases = [(200, "BUY"), (300, "BUY")]
+
+    ai_dry_run.run_curated(
+        candles, cases, _FailingEngine(http_status=500), "stub",
+        bars_count=100, retries=0, sleep_seconds=0,
+    )
+
+    out = capsys.readouterr().out
+    assert "判断が1件も取れませんでした" in out
