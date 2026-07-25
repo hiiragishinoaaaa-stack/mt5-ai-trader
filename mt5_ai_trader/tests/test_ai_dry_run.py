@@ -52,10 +52,13 @@ def test_iter_windows_returns_requested_count_in_chronological_order():
     windows = ai_dry_run.iter_windows(candles, bars_count=100, count=3, step=50)
 
     assert len(windows) == 3
-    assert all(len(w) == 100 for w in windows)
+    assert all(len(w) == 100 for _, w in windows)
     # 古い順に並ぶ(表示が時系列になるように)
-    times = [w.iloc[-1]["time"] for w in windows]
+    times = [w.iloc[-1]["time"] for _, w in windows]
     assert times == sorted(times)
+    # 絶対indexは、そのウィンドウ最終足の元データ上の位置
+    for end_index, w in windows:
+        assert candles.iloc[end_index]["time"] == w.iloc[-1]["time"]
 
 
 def test_iter_windows_stops_when_history_runs_out():
@@ -384,3 +387,95 @@ def test_probe_reports_missing_key(monkeypatch, capsys):
     ai_dry_run.probe_generate_content()
 
     assert "GEMINI_API_KEY が未設定" in capsys.readouterr().out
+
+
+# --- 判断後の採点 --------------------------------------------------------------
+
+
+def test_evaluate_action_skips_wait_without_counting_it_as_a_loss():
+    """見送りは損益0の「取引なし」。外れとして数えない。"""
+    verdict = ai_dry_run.evaluate_action(
+        "WAIT", lambda *a: 0, 0, 100.0, 100.0, 0.001, 20.0, 6.0, 1.5
+    )
+
+    assert verdict.outcome == -2
+    assert verdict.ev_r == 0.0
+    assert "見送り" in verdict.mark
+
+
+def test_evaluate_action_scores_a_win_net_of_spread():
+    verdict = ai_dry_run.evaluate_action(
+        "BUY", lambda *a: 1, 0, 100.0, 100.0, 0.001, 60.0, 6.0, 1.5
+    )
+
+    assert verdict.outcome == 1
+    # RR1.5から、スプレッド60pt / SL幅600pt = 0.1R を引く
+    assert verdict.ev_r == pytest.approx(1.4)
+
+
+def test_evaluate_action_scores_a_loss_net_of_spread():
+    verdict = ai_dry_run.evaluate_action(
+        "SELL", lambda *a: 0, 0, 100.0, 100.0, 0.001, 60.0, 6.0, 1.5
+    )
+
+    assert verdict.ev_r == pytest.approx(-1.1)
+
+
+def test_evaluate_action_marks_unresolved_trades():
+    verdict = ai_dry_run.evaluate_action(
+        "BUY", lambda *a: -1, 0, 100.0, 100.0, 0.001, 0.0, 6.0, 1.5
+    )
+
+    assert verdict.outcome == -1
+    assert verdict.ev_r == 0.0
+
+
+def test_summarise_excludes_skips_from_the_denominator():
+    verdicts = [
+        ai_dry_run.Verdict("BUY", 1, 1.4),
+        ai_dry_run.Verdict("BUY", 0, -1.1),
+        ai_dry_run.Verdict("WAIT", -2, 0.0),
+    ]
+
+    line = ai_dry_run.summarise("gemini", verdicts)
+
+    assert " 2" in line  # 取引数は2件(見送りは除く)
+    assert "+0.150" in line  # (1.4 - 1.1) / 2
+
+
+def test_summarise_handles_all_skipped():
+    line = ai_dry_run.summarise("gemini", [ai_dry_run.Verdict("WAIT", -2, 0.0)])
+
+    assert "-" in line
+
+
+def test_main_prints_scoring_table(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 600)
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _StubEngine("BUY"))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100", "--count", "2", "--step", "50"],
+    )
+
+    ai_dry_run.main()
+
+    out = capsys.readouterr().out
+    assert "採点" in out
+    assert "EV(R)" in out
+    assert "一致率は成績ではない" in out
+
+
+def test_main_no_evaluate_skips_scoring(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 400)
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _StubEngine("BUY"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100",
+            "--count", "1", "--no-evaluate",
+        ],
+    )
+
+    ai_dry_run.main()
+
+    assert "採点" not in capsys.readouterr().out

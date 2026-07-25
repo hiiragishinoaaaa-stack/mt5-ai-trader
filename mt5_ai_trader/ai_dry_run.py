@@ -33,13 +33,15 @@ import argparse
 import json
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 
 import pandas as pd
 
 import config
 import indicators
 from ai_engine import RuleBasedAIEngine, Signal, describe_market_conditions, get_ai_engine
-from backtest_replay import load_candles
+from backtest_audit import _make_forward_scanner
+from backtest_replay import infer_point_size, load_candles
 
 _MODELS_URL_TEMPLATE = "https://generativelanguage.googleapis.com/{version}/models"
 _API_VERSIONS = ("v1beta", "v1")
@@ -233,6 +235,9 @@ def probe_generate_content(max_candidates: int = 6) -> None:
 def iter_windows(candles: pd.DataFrame, bars_count: int, count: int, step: int):
     """新しい方から順に、本番と同じ長さのウィンドウをcount個切り出す。
 
+    返すのは(最終足の絶対インデックス, ウィンドウ)の組。絶対インデックスは、
+    判断後に実際どうなったかを元データ上で前方走査するのに使う。
+
     stepは何本ずらして次のウィンドウを取るか。1本ずらすだけだと判断材料が
     ほぼ同じになり、AIの答えも当然似るため、既定では十分に離す。
     """
@@ -242,7 +247,7 @@ def iter_windows(candles: pd.DataFrame, bars_count: int, count: int, step: int):
         start = end - bars_count
         if start < 0:
             break
-        windows.append(candles.iloc[start:end].reset_index(drop=True))
+        windows.append((end - 1, candles.iloc[start:end].reset_index(drop=True)))
         end -= step
     return list(reversed(windows))
 
@@ -260,6 +265,65 @@ def score_line(signal: Signal) -> str | None:
         f"      スコア: BUY {d['buy_score']}/{d['buy_total']} , "
         f"SELL {d['sell_score']}/{d['sell_total']} (必要 {d['required_score']})"
     )
+
+
+@dataclass
+class Verdict:
+    """1件の判断とその後の実際の結果。"""
+
+    action: str
+    outcome: int  # 1=TP先着, 0=SL先着, -1=期限内に未決着, -2=見送り(WAIT)
+    ev_r: float   # リスク1R単位の損益。見送りは0
+
+    @property
+    def mark(self) -> str:
+        return {1: "○ 的中", 0: "× 外れ", -1: "△ 未決着", -2: "— 見送り"}[self.outcome]
+
+
+def evaluate_action(
+    action: str,
+    scan,
+    entry_index: int,
+    entry_price: float,
+    atr_points: float,
+    point_size: float,
+    spread_points: float,
+    sl_atr_mult: float,
+    rr: float,
+) -> Verdict:
+    """判断どおりに入っていたら、その後どうなったかを実データで採点する。
+
+    過去データで動かしている以上「その後」は分かっているので、ルールとAIを
+    一致率ではなく**実際の損益**で比べられる。WAIT(見送り)は取引をしないので
+    損益0として扱い、勝敗の分母からも外す。取引しない判断を「外れ」と数えると、
+    危ない場面を避ける動き(=フィルターとしての価値)が評価できなくなるため。
+    """
+    if action not in ("BUY", "SELL"):
+        return Verdict(action, -2, 0.0)
+
+    sl_px = sl_atr_mult * atr_points * point_size
+    tp_px = rr * sl_atr_mult * atr_points * point_size
+    is_buy = action == "BUY"
+    outcome = scan(
+        entry_index,
+        entry_price + tp_px if is_buy else entry_price - tp_px,
+        entry_price - sl_px if is_buy else entry_price + sl_px,
+        is_buy,
+    )
+    if outcome < 0:
+        return Verdict(action, -1, 0.0)
+    cost_r = spread_points / (sl_atr_mult * atr_points)
+    return Verdict(action, outcome, (rr if outcome == 1 else -1.0) - cost_r)
+
+
+def summarise(name: str, verdicts: list[Verdict]) -> str:
+    traded = [v for v in verdicts if v.outcome in (0, 1)]
+    skipped = sum(1 for v in verdicts if v.outcome == -2)
+    if not traded:
+        return f"{name:<8}{'-':>8}{'-':>8}{'-':>10}{skipped:>10}"
+    wins = sum(1 for v in traded if v.outcome == 1)
+    ev = sum(v.ev_r for v in traded) / len(traded)
+    return f"{name:<8}{len(traded):>8}{wins:>8}{ev:>+10.3f}{skipped:>10}"
 
 
 def main() -> None:
@@ -291,6 +355,14 @@ def main() -> None:
     )
     parser.add_argument("--bars-count", type=int, default=None, help="既定: config.BARS_COUNT(本番と揃えること)")
     parser.add_argument("--show-prompt", action="store_true", help="LLMへ実際に渡している文面を表示する")
+    parser.add_argument(
+        "--eval-sl-mult",
+        type=float,
+        default=6.0,
+        help="採点に使うSL幅(ATR倍率)。既定6(--geometryでコスト負けしにくかった水準)",
+    )
+    parser.add_argument("--eval-rr", type=float, default=1.5, help="採点に使うリスクリワード比。既定1.5")
+    parser.add_argument("--no-evaluate", action="store_true", help="判断後の結果を採点しない(表示のみ)")
     args = parser.parse_args()
 
     if args.list_models:
@@ -318,37 +390,78 @@ def main() -> None:
         f"AIエンジン={args.engine}、発注は一切しません。\n"
     )
 
+    evaluate = not args.no_evaluate
+    point_size = infer_point_size(candles)
+    spreads = candles["spread"].to_numpy(dtype=float) if "spread" in candles.columns else None
+    scan, _ = _make_forward_scanner(candles, max_horizon=480, optimistic_fill=False)
+
     agreements = 0
-    for i, window in enumerate(windows, start=1):
+    rule_verdicts: list[Verdict] = []
+    ai_verdicts: list[Verdict] = []
+
+    for i, (end_index, window) in enumerate(windows, start=1):
         enriched = indicators.add_indicators(window)
         latest = enriched.iloc[-1]
         when = pd.Timestamp(latest["time"]) if "time" in enriched.columns else None
+        close = float(latest["close"])
 
-        print(f"--- {i}/{len(windows)}  {when}  終値={float(latest['close']):.3f} ---")
+        print(f"--- {i}/{len(windows)}  {when}  終値={close:.3f} ---")
         if args.show_prompt:
             print("  [AIへ渡している文面]")
             for line in describe_market_conditions(enriched, config.SYMBOL, config.TIMEFRAME).splitlines():
                 print(f"    {line}")
             print()
 
+        atr = float(latest["atr"]) if "atr" in enriched.columns and not pd.isna(latest["atr"]) else 0.0
+        atr_points = atr / point_size if point_size > 0 else 0.0
+        spread = float(spreads[end_index]) if spreads is not None else 0.0
+
+        def judge(signal: Signal) -> Verdict | None:
+            if not evaluate or atr_points <= 0:
+                return None
+            return evaluate_action(
+                signal.action, scan, end_index, close, atr_points, point_size,
+                spread, args.eval_sl_mult, args.eval_rr,
+            )
+
         rule_signal = rule_engine.decide(enriched)
+        rule_verdict = judge(rule_signal)
         print(f"  ルール : {format_signal(rule_signal)}")
         breakdown = score_line(rule_signal)
         if breakdown:
             print(breakdown)
+        if rule_verdict:
+            rule_verdicts.append(rule_verdict)
+            print(f"      結果: {rule_verdict.mark}")
 
         ai_signal = ai_engine.decide(enriched)
+        ai_verdict = judge(ai_signal)
         print(f"  AI({args.engine}) : {format_signal(ai_signal)}")
+        if ai_verdict:
+            ai_verdicts.append(ai_verdict)
+            print(f"      結果: {ai_verdict.mark}")
 
         same = rule_signal.action == ai_signal.action
         agreements += same
-        print(f"  → {'一致' if same else '不一致'}\n")
+        print(f"  → 判断は{'一致' if same else '不一致'}\n")
 
-    print(f"一致率: {agreements}/{len(windows)} ({agreements / len(windows) * 100:.0f}%)")
+    if rule_verdicts or ai_verdicts:
+        print(f"=== 採点(SL={args.eval_sl_mult:g}xATR / RR=1:{args.eval_rr:g}、実測スプレッド適用) ===")
+        print(f"{'':<8}{'取引数':>8}{'的中':>8}{'EV(R)':>10}{'見送り':>10}")
+        print(summarise("ルール", rule_verdicts))
+        print(summarise(args.engine, ai_verdicts))
+        print(
+            "\nEV(R)は1取引あたりの期待損益(リスク1R=SL幅)。プラスなら勝ち越し。"
+            "\n見送り(WAIT)は取引しないので分母から外している。危ない場面を避ける動きは"
+            "\n「取引数が減り、EVが上がる」形で現れる。"
+        )
+
+    print(f"\n判断の一致率: {agreements}/{len(windows)} ({agreements / len(windows) * 100:.0f}%)")
     print(
+        "※一致率は成績ではない。ルール側は4年の監査でエッジ無しと確定しているので、"
+        "\n  一致するほど良いわけではない(RESEARCH_FINDINGS.md 確定事項2)。見るべきはEV(R)。"
+        "\n※この件数では何も結論できない。傾向を掴むには最低でも数百件が要る。"
         "\n※ここでの判断は表示だけで、発注にも学習にも使われない。"
-        "\n※一致/不一致は「どちらが正しいか」ではない。当否は決済結果でしか測れず、"
-        "\n  その集計は本番のシャドーモード(GEMINI_SHADOW=true)とgemini_shadow_report.pyで行う。"
     )
 
 
