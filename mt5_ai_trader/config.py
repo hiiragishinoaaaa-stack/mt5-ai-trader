@@ -455,6 +455,11 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 # と組み合わせれば、実質無料で運用できる想定。
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Generative Language APIのバージョン。モデルによって公開されている
+# バージョンが違い、合っていないと generateContent が404を返す
+# (401/403ではないので「キーが無効」と誤読しやすい)。
+# 使える組み合わせは ai_dry_run.py --list-models で確認できる。
+GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta")
 AI_ENGINE_TIMEOUT_SECONDS = _env_int("AI_ENGINE_TIMEOUT_SECONDS", 20)
 
 # --- Geminiシャドーモード(2026-07、Fable5との相談を踏まえて追加) ---

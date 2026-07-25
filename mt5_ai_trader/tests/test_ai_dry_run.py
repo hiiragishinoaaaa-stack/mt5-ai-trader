@@ -180,6 +180,39 @@ def test_main_reports_when_history_too_short(tmp_path, monkeypatch, capsys):
 # --- --list-models(404の切り分け) ---------------------------------------------
 
 
+def _fake_urlopen(per_version: dict):
+    """バージョンごとに応答/例外を切り替えるurlopenの差し替え。"""
+    import urllib.error
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _open(req, *a, **k):
+        version = req.full_url.split("/")[3]
+        outcome = per_version.get(version)
+        if outcome is None:
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        if isinstance(outcome, int):
+            raise urllib.error.HTTPError(req.full_url, outcome, "Denied", {}, None)
+        return _Resp(json.dumps({"models": outcome}).encode("utf-8"))
+
+    return _open
+
+
+def _model(name: str, method: str = "generateContent"):
+    return {"name": f"models/{name}", "supportedGenerationMethods": [method]}
+
+
 def test_list_models_reports_missing_key(monkeypatch, capsys):
     monkeypatch.setattr("config.GEMINI_API_KEY", "")
 
@@ -188,53 +221,63 @@ def test_list_models_reports_missing_key(monkeypatch, capsys):
     assert "GEMINI_API_KEY が未設定" in capsys.readouterr().out
 
 
-def test_list_models_flags_configured_model_as_unavailable(monkeypatch, capsys):
-    """404の典型原因(設定中のモデル名が一覧に無い)をはっきり指摘する。"""
-    body = json.dumps(
-        {
-            "models": [
-                {"name": "models/gemini-1.5-flash", "supportedGenerationMethods": ["generateContent"]},
-                {"name": "models/embed-only", "supportedGenerationMethods": ["embedContent"]},
-            ]
-        }
-    ).encode("utf-8")
-
-    class _Resp:
-        def read(self):
-            return body
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
+def test_list_models_confirms_a_valid_configuration(monkeypatch, capsys):
     monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_API_VERSION", "v1beta")
     monkeypatch.setattr("config.GEMINI_MODEL", "gemini-2.5-flash")
-    monkeypatch.setattr(ai_dry_run.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    monkeypatch.setattr(
+        ai_dry_run.urllib.request, "urlopen", _fake_urlopen({"v1beta": [_model("gemini-2.5-flash")]})
+    )
 
     ai_dry_run.list_gemini_models()
 
     out = capsys.readouterr().out
-    assert "gemini-1.5-flash" in out
-    assert "embed-only" not in out  # generateContent非対応は出さない
-    assert "404の原因です" in out
-    assert "dummy-key" not in out  # キーは決して表示しない
+    assert "現在の設定" in out and "有効です" in out
+    assert "dummy-key" not in out
 
 
-def test_list_models_explains_auth_error(monkeypatch, capsys):
-    import urllib.error
-
+def test_list_models_points_at_the_other_api_version(monkeypatch, capsys):
+    """同じモデルが別バージョンにある場合、その乗り換え先を名指しする。"""
     monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_API_VERSION", "v1beta")
+    monkeypatch.setattr("config.GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(
+        ai_dry_run.urllib.request,
+        "urlopen",
+        _fake_urlopen({"v1beta": [_model("gemini-1.0-pro")], "v1": [_model("gemini-2.5-flash")]}),
+    )
 
-    def _raise(*a, **k):
-        raise urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+    ai_dry_run.list_gemini_models()
 
-    monkeypatch.setattr(ai_dry_run.urllib.request, "urlopen", _raise)
+    out = capsys.readouterr().out
+    assert "404の原因です" in out
+    assert "GEMINI_API_VERSION=v1" in out
+
+
+def test_list_models_suggests_a_flash_model_when_nothing_matches(monkeypatch, capsys):
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_API_VERSION", "v1beta")
+    monkeypatch.setattr("config.GEMINI_MODEL", "gemini-9-imaginary")
+    monkeypatch.setattr(
+        ai_dry_run.urllib.request,
+        "urlopen",
+        _fake_urlopen({"v1beta": [_model("gemini-2.0-flash"), _model("text-embed", "embedContent")]}),
+    )
+
+    ai_dry_run.list_gemini_models()
+
+    out = capsys.readouterr().out
+    assert "GEMINI_MODEL=gemini-2.0-flash" in out
+    assert "text-embed" not in out  # generateContent非対応は候補にしない
+
+
+def test_list_models_explains_auth_error_across_versions(monkeypatch, capsys):
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr(ai_dry_run.urllib.request, "urlopen", _fake_urlopen({"v1beta": 403, "v1": 403}))
 
     ai_dry_run.list_gemini_models()
 
     out = capsys.readouterr().out
     assert "HTTP 403" in out
-    assert "AIza" in out  # 正しいキー形式を案内する
+    assert "認証エラー" in out
     assert "dummy-key" not in out

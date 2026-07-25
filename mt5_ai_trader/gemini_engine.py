@@ -26,7 +26,7 @@ from ai_engine import AIEngine, LLM_SYSTEM_PROMPT, Signal, describe_market_condi
 
 logger = logging.getLogger("mt5_ai_trader")
 
-_API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+_API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent"
 
 
 class GeminiEngine(AIEngine):
@@ -49,7 +49,7 @@ class GeminiEngine(AIEngine):
             }
         ).encode("utf-8")
 
-        url = _API_URL_TEMPLATE.format(model=config.GEMINI_MODEL)
+        url = _API_URL_TEMPLATE.format(version=config.GEMINI_API_VERSION, model=config.GEMINI_MODEL)
         req = urllib.request.Request(
             url,
             data=body,

@@ -41,61 +41,104 @@ import indicators
 from ai_engine import RuleBasedAIEngine, Signal, describe_market_conditions, get_ai_engine
 from backtest_replay import load_candles
 
-_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+_MODELS_URL_TEMPLATE = "https://generativelanguage.googleapis.com/{version}/models"
+_API_VERSIONS = ("v1beta", "v1")
+
+
+def _fetch_models(version: str) -> tuple[list[str], str | None]:
+    """1つのAPIバージョンで、generateContentが使えるモデル名を取得する。
+
+    戻り値は(モデル名リスト, エラー説明)。APIキーはクエリ文字列ではなく
+    ヘッダで送る(エラー応答がリクエストURLを含んでもキーが漏れないように)。
+    """
+    req = urllib.request.Request(
+        _MODELS_URL_TEMPLATE.format(version=version),
+        headers={"x-goog-api-key": config.GEMINI_API_KEY},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return [], f"HTTP {exc.code} {exc.reason}"
+    except urllib.error.URLError as exc:
+        return [], f"接続エラー: {exc.reason}"
+
+    return (
+        [
+            m["name"].removeprefix("models/")
+            for m in payload.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ],
+        None,
+    )
 
 
 def list_gemini_models() -> None:
-    """このAPIキーで実際に使えるGeminiモデル名を一覧する(切り分け用)。
+    """このAPIキーで実際に使えるモデルを、APIバージョン別に一覧する(切り分け用)。
 
     generateContentが404を返すとき、原因は「キーが無効」ではなく
-    「そのモデル名がこのキーから見えない」であることが多い(キーが無効なら
-    401/403になる)。ここでモデル一覧が取れれば認証は通っており、あとは
-    config.GEMINI_MODELを一覧にある名前へ合わせればよい。
+    「そのモデル名がこのバージョンに存在しない」ことが多い(キーが無効なら
+    401/403になる)。モデル名とAPIバージョンは組で決まるため、v1betaとv1の
+    両方を問い合わせて、今の設定(GEMINI_MODEL / GEMINI_API_VERSION)が
+    どこに当てはまるのかを示す。
 
-    APIキーはクエリ文字列ではなくヘッダで送る。エラー応答の本文に
-    リクエストURLが含まれてもキーが漏れないようにするため。
-    表示するのはモデル名とHTTPステータスだけで、キーは決して出力しない。
+    表示するのはモデル名とHTTPステータスだけで、APIキーは決して出力しない。
     """
     if not config.GEMINI_API_KEY:
         print("GEMINI_API_KEY が未設定です(.env を確認してください)。")
         return
 
-    req = urllib.request.Request(_MODELS_URL, headers={"x-goog-api-key": config.GEMINI_API_KEY})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        print(f"モデル一覧の取得に失敗しました: HTTP {exc.code} {exc.reason}")
-        if exc.code in (401, 403):
-            print("→ 認証エラー。APIキー自体が無効か、種類が違います。")
-            print("   Google AI Studio (https://aistudio.google.com/apikey) で作る")
-            print("   Gemini APIキーは 'AIza' で始まります。別の値なら作り直してください。")
+    found: dict[str, list[str]] = {}
+    errors: dict[str, str] = {}
+    for version in _API_VERSIONS:
+        models, error = _fetch_models(version)
+        if error:
+            errors[version] = error
+        elif models:
+            found[version] = models
+
+    if not found:
+        print("どのAPIバージョンでもモデル一覧を取得できませんでした:")
+        for version, error in errors.items():
+            print(f"  {version}: {error}")
+        if any("401" in e or "403" in e for e in errors.values()):
+            print(
+                "\n→ 認証エラーです。キーが途中で切れていないか(コピー漏れ)、"
+                "\n  https://aistudio.google.com/apikey で作り直したものが .env に入っているかを確認してください。"
+            )
         else:
-            print("→ 認証以外の問題です。ネットワーク/プロキシ設定も確認してください。")
-        return
-    except urllib.error.URLError as exc:
-        print(f"モデル一覧の取得に失敗しました(接続エラー): {exc.reason}")
+            print("\n→ 認証以外の問題です。VPSからの外向き通信/プロキシ設定も確認してください。")
         return
 
-    models = payload.get("models", [])
-    usable = [
-        m["name"].removeprefix("models/")
-        for m in models
-        if "generateContent" in m.get("supportedGenerationMethods", [])
-    ]
-    if not usable:
-        print("このキーで generateContent を使えるモデルが見つかりませんでした。")
-        return
+    print("認証は成功しました。使えるモデル:\n")
+    for version, models in found.items():
+        print(f"[{version}]")
+        for name in models:
+            current = version == config.GEMINI_API_VERSION and name == config.GEMINI_MODEL
+            print(f"  {name}{'  ← 現在の設定' if current else ''}")
+        print()
 
-    print(f"認証は成功しました。generateContent を使えるモデル {len(usable)} 件:")
-    for name in usable:
-        mark = "  ← 現在の設定" if name == config.GEMINI_MODEL else ""
-        print(f"  {name}{mark}")
-    if config.GEMINI_MODEL not in usable:
+    if config.GEMINI_MODEL in found.get(config.GEMINI_API_VERSION, []):
         print(
-            f"\n現在の GEMINI_MODEL={config.GEMINI_MODEL} は一覧にありません。これが404の原因です。"
-            f"\n.env に GEMINI_MODEL=<上の一覧から選んだ名前> を追記してください。"
+            f"現在の設定 (GEMINI_API_VERSION={config.GEMINI_API_VERSION} / "
+            f"GEMINI_MODEL={config.GEMINI_MODEL}) は有効です。"
         )
+        return
+
+    print(
+        f"現在の設定 (GEMINI_API_VERSION={config.GEMINI_API_VERSION} / "
+        f"GEMINI_MODEL={config.GEMINI_MODEL}) はこの組み合わせに存在しません。これが404の原因です。"
+    )
+    for version, models in found.items():
+        if config.GEMINI_MODEL in models:
+            print(f"→ 同じモデルは {version} にあります。.env に GEMINI_API_VERSION={version} を追記してください。")
+            return
+    preferred = next(
+        (m for models in found.values() for m in models if "flash" in m),
+        next(iter(next(iter(found.values())))),
+    )
+    version = next(v for v, models in found.items() if preferred in models)
+    print(f"→ 例えば .env に次の2行を入れると動きます:\n   GEMINI_API_VERSION={version}\n   GEMINI_MODEL={preferred}")
 
 
 def iter_windows(candles: pd.DataFrame, bars_count: int, count: int, step: int):
