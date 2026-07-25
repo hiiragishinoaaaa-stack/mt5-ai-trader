@@ -1,0 +1,177 @@
+"""ai_dry_run.py の単体テスト。ネットワーク・MT5・EA不要。
+
+AIエンジンはダミーに差し替えるため、実際のAPI呼び出しは一切発生しない。
+"""
+from __future__ import annotations
+
+import json
+
+import pandas as pd
+import pytest
+
+import ai_dry_run
+from ai_engine import AIEngine, Signal
+
+
+class _StubEngine(AIEngine):
+    """常に同じ判断を返すダミー。呼ばれた回数を記録する。"""
+
+    def __init__(self, action: str = "BUY") -> None:
+        self.action = action
+        self.calls = 0
+
+    def decide(self, df: pd.DataFrame) -> Signal:
+        self.calls += 1
+        return Signal(self.action, "スタブの判断", {}, confidence=42.0)
+
+
+def _candles(n: int) -> pd.DataFrame:
+    rows = []
+    price = 150.0
+    t = 1700000000
+    for i in range(n):
+        price += 0.02 if i % 3 == 0 else -0.01
+        o = price
+        c = price + 0.005
+        rows.append(
+            {"time": t, "open": o, "high": max(o, c) + 0.02, "low": min(o, c) - 0.02, "close": c, "spread": 2}
+        )
+        t += 900
+        price = c
+    df = pd.DataFrame(rows)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    return df
+
+
+# --- iter_windows -------------------------------------------------------------
+
+
+def test_iter_windows_returns_requested_count_in_chronological_order():
+    candles = _candles(500)
+
+    windows = ai_dry_run.iter_windows(candles, bars_count=100, count=3, step=50)
+
+    assert len(windows) == 3
+    assert all(len(w) == 100 for w in windows)
+    # 古い順に並ぶ(表示が時系列になるように)
+    times = [w.iloc[-1]["time"] for w in windows]
+    assert times == sorted(times)
+
+
+def test_iter_windows_stops_when_history_runs_out():
+    candles = _candles(150)
+
+    windows = ai_dry_run.iter_windows(candles, bars_count=100, count=5, step=40)
+
+    # 100本必要なので、150本からは2つしか取れない(末尾と40本前)
+    assert len(windows) == 2
+
+
+def test_iter_windows_empty_when_shorter_than_window():
+    candles = _candles(50)
+
+    assert ai_dry_run.iter_windows(candles, bars_count=100, count=3, step=10) == []
+
+
+# --- format_signal / score_line -----------------------------------------------
+
+
+def test_format_signal_shows_action_confidence_and_reason():
+    text = ai_dry_run.format_signal(Signal("SELL", "下降トレンド", {}, confidence=61.5))
+
+    assert "SELL" in text
+    assert "61.5" in text
+    assert "下降トレンド" in text
+
+
+def test_score_line_none_without_breakdown():
+    assert ai_dry_run.score_line(Signal("WAIT", "理由", {})) is None
+
+
+def test_score_line_renders_both_directions():
+    signal = Signal(
+        "WAIT",
+        "理由",
+        {"buy_score": 4, "buy_total": 11, "sell_score": 2, "sell_total": 11, "required_score": 7},
+    )
+
+    line = ai_dry_run.score_line(signal)
+
+    assert "BUY 4/11" in line
+    assert "SELL 2/11" in line
+    assert "必要 7" in line
+
+
+# --- CLI ----------------------------------------------------------------------
+
+
+def _write_history(tmp_path, n: int):
+    candles = _candles(n)
+    payload = {
+        "symbol": "USDJPY",
+        "timeframe": "M15",
+        "exported_at": int(candles.iloc[-1]["time"].timestamp()),
+        "candles": [
+            {
+                "time": int(row.time.timestamp()),
+                "open": row.open,
+                "high": row.high,
+                "low": row.low,
+                "close": row.close,
+                "spread": 2,
+            }
+            for row in candles.itertuples()
+        ],
+    }
+    path = tmp_path / "history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_main_prints_both_judgements_and_agreement(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 400)
+    stub = _StubEngine("BUY")
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: stub)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100", "--count", "2", "--step", "50"],
+    )
+
+    ai_dry_run.main()
+
+    out = capsys.readouterr().out
+    assert stub.calls == 2  # 件数ぶんだけAIを呼ぶ(=API呼び出し回数)
+    assert "ルール" in out
+    assert "スタブの判断" in out
+    assert "一致率: " in out
+
+
+def test_main_show_prompt_includes_llm_text(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 300)
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _StubEngine("WAIT"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100",
+            "--count", "1", "--show-prompt",
+        ],
+    )
+
+    ai_dry_run.main()
+
+    out = capsys.readouterr().out
+    assert "AIへ渡している文面" in out
+    assert "USDJPY" in out
+
+
+def test_main_reports_when_history_too_short(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 40)
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _StubEngine())
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100", "--count", "1"],
+    )
+
+    ai_dry_run.main()
+
+    assert "ウィンドウを切り出せませんでした" in capsys.readouterr().out
