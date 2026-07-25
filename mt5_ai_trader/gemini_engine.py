@@ -64,6 +64,21 @@ class GeminiEngine(AIEngine):
             with urllib.request.urlopen(req, timeout=config.AI_ENGINE_TIMEOUT_SECONDS) as res:
                 payload = json.loads(res.read().decode("utf-8"))
             content = payload["candidates"][0]["content"]["parts"][0]["text"]
+        except urllib.error.HTTPError as exc:
+            # ステータスだけでは原因が分からない(特に404は「キーが無効」ではなく
+            # 「そのモデルがこのAPIバージョンで生成に使えない」ことが多い)。
+            # Googleの応答本文に理由が書かれているので一緒に記録する。
+            # APIキーはヘッダで送っているため本文には含まれない。
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:  # 本文が読めなくても判断は続行する
+                pass
+            logger.warning(
+                "gemini_engine: API呼び出しに失敗しました: HTTP %s %s (model=%s version=%s) %s",
+                exc.code, exc.reason, config.GEMINI_MODEL, config.GEMINI_API_VERSION, detail,
+            )
+            return Signal("WAIT", f"Gemini API呼び出しに失敗しました(HTTP {exc.code}: {exc.reason})", {})
         except (urllib.error.URLError, OSError, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("gemini_engine: API呼び出しに失敗しました: %s", exc)
             return Signal("WAIT", f"Gemini API呼び出しに失敗しました({exc})", {})

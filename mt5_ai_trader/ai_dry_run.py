@@ -141,6 +141,95 @@ def list_gemini_models() -> None:
     print(f"→ 例えば .env に次の2行を入れると動きます:\n   GEMINI_API_VERSION={version}\n   GEMINI_MODEL={preferred}")
 
 
+def _redact(text: str) -> str:
+    """画面に出す前にAPIキーらしき文字列を伏せる(スクリーンショット対策)。
+
+    キーはヘッダで送っているのでGoogleの応答本文には現れないはずだが、
+    表示する文字列に対して最後の砦として掛けておく。
+    """
+    key = config.GEMINI_API_KEY
+    return text.replace(key, "***") if key else text
+
+
+def _try_generate(version: str, model: str) -> tuple[bool, str]:
+    """最小のgenerateContentを1回投げて、成否と説明を返す。"""
+    body = json.dumps({"contents": [{"role": "user", "parts": [{"text": "ping"}]}]}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent",
+        data=body,
+        headers={"Content-Type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            return True, "OK"
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        # 応答本文の"message"だけ抜き出せれば、それが一番説明的
+        try:
+            detail = json.loads(detail).get("error", {}).get("message", detail)
+        except Exception:
+            pass
+        return False, _redact(f"HTTP {exc.code} {exc.reason}: {detail[:300]}")
+    except urllib.error.URLError as exc:
+        return False, f"接続エラー: {exc.reason}"
+
+
+def probe_generate_content(max_candidates: int = 6) -> None:
+    """実際に生成を通せる(バージョン, モデル)の組を探し当てる。
+
+    --list-modelsが「有効」と言っても generateContent が404になることがある。
+    モデル一覧に載っていても、そのモデルが生成の提供を終了していると、
+    一覧には残ったまま生成側だけ404を返すため。ここでは一覧に頼らず、
+    実際に最小リクエストを投げて通る組み合わせを確かめる。
+
+    まず現在の設定を試し、駄目なら一覧のFlash系を新しい順に試す。
+    呼び出し回数はmax_candidatesで抑える(1件あたり極小のリクエスト)。
+    """
+    if not config.GEMINI_API_KEY:
+        print("GEMINI_API_KEY が未設定です(.env を確認してください)。")
+        return
+
+    print(f"現在の設定を試します: {config.GEMINI_API_VERSION} / {config.GEMINI_MODEL}")
+    ok, detail = _try_generate(config.GEMINI_API_VERSION, config.GEMINI_MODEL)
+    print(f"  → {'成功' if ok else '失敗: ' + detail}\n")
+    if ok:
+        print("現在の設定で生成できています。.env の変更は不要です。")
+        return
+
+    candidates: list[tuple[str, str]] = []
+    for version in _API_VERSIONS:
+        models, error = _fetch_models(version)
+        if error:
+            continue
+        # 生成が軽く安価なFlash系を優先し、画像/音声など用途違いは除く
+        flash = [m for m in models if "flash" in m and not any(x in m for x in ("image", "tts", "lite"))]
+        candidates += [(version, m) for m in sorted(flash, reverse=True)]
+
+    candidates = [c for c in candidates if c != (config.GEMINI_API_VERSION, config.GEMINI_MODEL)]
+    if not candidates:
+        print("試せる候補モデルが見つかりませんでした。--list-models の結果を確認してください。")
+        return
+
+    print(f"他の候補を {min(len(candidates), max_candidates)} 件試します...\n")
+    for version, model in candidates[:max_candidates]:
+        ok, detail = _try_generate(version, model)
+        print(f"  {version} / {model}: {'成功' if ok else detail}")
+        if ok:
+            print(
+                f"\n動く組み合わせが見つかりました。.env に次の2行を追記してください:\n"
+                f"   GEMINI_API_VERSION={version}\n"
+                f"   GEMINI_MODEL={model}"
+            )
+            return
+
+    print("\n候補がすべて失敗しました。上のエラー本文をそのまま共有してください。")
+
+
 def iter_windows(candles: pd.DataFrame, bars_count: int, count: int, step: int):
     """新しい方から順に、本番と同じ長さのウィンドウをcount個切り出す。
 
@@ -182,6 +271,11 @@ def main() -> None:
         action="store_true",
         help="このAPIキーで使えるGeminiモデル名を一覧する(404の切り分け用)。キーは表示しない",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="実際に生成を通せるモデルを探し当てる(--list-modelsが有効と言うのに404になる場合)",
+    )
     parser.add_argument("--candles-file", help="ARTEMIS_HistoryExport.mq5が書き出したJSON")
     parser.add_argument(
         "--engine",
@@ -201,6 +295,9 @@ def main() -> None:
 
     if args.list_models:
         list_gemini_models()
+        return
+    if args.probe:
+        probe_generate_content()
         return
     if not args.candles_file:
         parser.error("--candles-file を指定してください(--list-models のときは不要)")

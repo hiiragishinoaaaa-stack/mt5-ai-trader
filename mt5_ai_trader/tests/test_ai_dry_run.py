@@ -281,3 +281,106 @@ def test_list_models_explains_auth_error_across_versions(monkeypatch, capsys):
     assert "HTTP 403" in out
     assert "認証エラー" in out
     assert "dummy-key" not in out
+
+
+# --- --probe(実際に生成が通る組み合わせを探す) ---------------------------------
+
+
+def _fake_generate(outcomes: dict):
+    """(version, model) ごとに成功/HTTPエラーを切り替えるurlopenの差し替え。
+
+    モデル一覧(GET)と生成(POST)の両方が同じurlopenを通るため、
+    リクエストの種別で応答を出し分ける。
+    """
+    import urllib.error
+
+    class _Resp:
+        def __init__(self, body=b"{}"):
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _open(req, *a, **k):
+        parts = req.full_url.split("/")
+        version = parts[3]
+        if req.data is None:  # モデル一覧
+            models = outcomes.get(("list", version))
+            if models is None:
+                raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+            return _Resp(json.dumps({"models": [_model(m) for m in models]}).encode("utf-8"))
+        model = parts[-1].removesuffix(":generateContent")
+        if outcomes.get((version, model)):
+            return _Resp()
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+
+    return _open
+
+
+def test_probe_confirms_working_configuration(monkeypatch, capsys):
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_API_VERSION", "v1beta")
+    monkeypatch.setattr("config.GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(
+        ai_dry_run.urllib.request, "urlopen", _fake_generate({("v1beta", "gemini-2.5-flash"): True})
+    )
+
+    ai_dry_run.probe_generate_content()
+
+    out = capsys.readouterr().out
+    assert "成功" in out
+    assert ".env の変更は不要" in out
+
+
+def test_probe_finds_a_working_model_when_configured_one_404s(monkeypatch, capsys):
+    """一覧に載っていても生成が404になる場合に、実際に通るモデルを提示する。"""
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_API_VERSION", "v1beta")
+    monkeypatch.setattr("config.GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(
+        ai_dry_run.urllib.request,
+        "urlopen",
+        _fake_generate(
+            {
+                ("list", "v1beta"): ["gemini-2.5-flash", "gemini-3.6-flash"],
+                ("list", "v1"): ["gemini-2.5-flash"],
+                ("v1beta", "gemini-3.6-flash"): True,  # これだけ生成できる
+            }
+        ),
+    )
+
+    ai_dry_run.probe_generate_content()
+
+    out = capsys.readouterr().out
+    assert "GEMINI_MODEL=gemini-3.6-flash" in out
+    assert "GEMINI_API_VERSION=v1beta" in out
+    assert "dummy-key" not in out
+
+
+def test_probe_reports_when_every_candidate_fails(monkeypatch, capsys):
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_API_VERSION", "v1beta")
+    monkeypatch.setattr("config.GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(
+        ai_dry_run.urllib.request,
+        "urlopen",
+        _fake_generate({("list", "v1beta"): ["gemini-2.5-flash", "gemini-3.6-flash"]}),
+    )
+
+    ai_dry_run.probe_generate_content()
+
+    assert "候補がすべて失敗しました" in capsys.readouterr().out
+
+
+def test_probe_reports_missing_key(monkeypatch, capsys):
+    monkeypatch.setattr("config.GEMINI_API_KEY", "")
+
+    ai_dry_run.probe_generate_content()
+
+    assert "GEMINI_API_KEY が未設定" in capsys.readouterr().out
