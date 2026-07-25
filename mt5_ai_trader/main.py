@@ -167,7 +167,10 @@ def _run_symbol_cycle(
         signal = apply_force_signal(signal, force_signal)
 
         shadow_signal: Signal | None = None
-        if shadow_engine is not None:
+        # ルールがWAITのサイクルは、既定ではシャドー判断を呼ばない
+        # (config.GEMINI_SHADOW_SIGNALS_ONLYのコメント参照)。
+        shadow_wanted = not config.GEMINI_SHADOW_SIGNALS_ONLY or signal.action in ("BUY", "SELL")
+        if shadow_engine is not None and shadow_wanted:
             try:
                 shadow_signal = shadow_engine.decide(enriched)
             except Exception:

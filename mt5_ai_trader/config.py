@@ -477,6 +477,16 @@ AI_ENGINE_TIMEOUT_SECONDS = _env_int("AI_ENGINE_TIMEOUT_SECONDS", 20)
 # (GEMINI_API_KEY必須、CandleThrottledEngineで通常のGeminiエンジン利用時
 # と同じコスト対策がかかる)。
 GEMINI_SHADOW = _env_bool("GEMINI_SHADOW", False)
+# trueだと、シャドー判断はルール側がBUY/SELLを出したサイクルだけ行う
+# (ルールがWAITのサイクルではGeminiを呼ばない)。
+#
+# 理由は2つある。1つはコスト: 毎ローソク足で呼ぶとM15で1日96回になり、
+# 無料枠の1日上限に当たって肝心なところで判断が欠ける。もう1つは検証設計:
+# LLMに期待できる役割は「ルールが出したシグナルを止める門番」であり、
+# それを測るのに必要なのはシグナルが出た瞬間のAIの意見だけで、ルールが
+# 何もしていないサイクルの意見は使い道が無い。
+# falseにすると全サイクルで呼ぶ(方向当ての比較をしたい場合)。
+GEMINI_SHADOW_SIGNALS_ONLY = _env_bool("GEMINI_SHADOW_SIGNALS_ONLY", True)
 
 # --- 実行制御 ---
 LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 60)

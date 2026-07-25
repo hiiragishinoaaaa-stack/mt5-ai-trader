@@ -123,8 +123,11 @@ class _FakeFeed:
 
 
 class _FakeAiEngine:
+    def __init__(self, signal: Signal | None = None):
+        self._signal = signal or Signal("WAIT", "トレンド・モメンタムの条件が揃っていません", {})
+
     def decide(self, df):
-        return Signal("WAIT", "トレンド・モメンタムの条件が揃っていません", {})
+        return self._signal
 
 
 class _RecordingOrderExecutor:
@@ -490,6 +493,8 @@ def _patch_ai_status_paths(monkeypatch, tmp_path):
 
 def test_run_once_records_shadow_signal_without_affecting_order(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DEMO_ONLY", True)
+    # ルールがWAITのサイクルでもシャドーを呼ぶ設定にして、記録経路だけを見る
+    monkeypatch.setattr(config, "GEMINI_SHADOW_SIGNALS_ONLY", False)
     _patch_ai_status_paths(monkeypatch, tmp_path)
     feed = _FakeFeed()
     ai_engine = _FakeAiEngine()  # 常にWAIT
@@ -549,3 +554,42 @@ def test_run_once_shadow_engine_error_does_not_break_main_flow(monkeypatch, tmp_
     assert len(order_executor.calls) == 1
     assert order_executor.calls[0][0].action == "BUY"
     assert not config.shadow_log_file_path(config.SYMBOL).exists()
+
+
+# --- シャドー判断の呼び出し回数を絞る(GEMINI_SHADOW_SIGNALS_ONLY) ---------------
+
+
+def test_shadow_engine_not_called_when_rule_waits(monkeypatch, tmp_path):
+    """既定では、ルールがWAITのサイクルでGeminiを呼ばない。
+
+    無料枠の1日上限に当たらないためと、検証したい役割(シグナルを止める門番)に
+    ルールが何もしていないサイクルの意見は使わないため。
+    """
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    monkeypatch.setattr(config, "GEMINI_SHADOW_SIGNALS_ONLY", True)
+    _patch_ai_status_paths(monkeypatch, tmp_path)
+    shadow_engine = _FakeShadowEngine()
+
+    main_module.run_once(
+        _FakeFeed(), _FakeAiEngine(), _RecordingOrderExecutor(), shadow_engine=shadow_engine
+    )
+
+    assert shadow_engine.calls == 0
+    assert not config.shadow_log_file_path(config.SYMBOL).exists()
+
+
+def test_shadow_engine_called_when_rule_signals(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DEMO_ONLY", True)
+    monkeypatch.setattr(config, "GEMINI_SHADOW_SIGNALS_ONLY", True)
+    _patch_ai_status_paths(monkeypatch, tmp_path)
+    shadow_engine = _FakeShadowEngine(Signal("WAIT", "過熱しているため見送り", {}, confidence=70))
+    ai_engine = _FakeAiEngine(Signal("BUY", "スコア到達", {}, confidence=70))
+
+    main_module.run_once(
+        _FakeFeed(), ai_engine, _RecordingOrderExecutor(), shadow_engine=shadow_engine
+    )
+
+    assert shadow_engine.calls == 1
+    row = json.loads(config.shadow_log_file_path(config.SYMBOL).read_text(encoding="utf-8").splitlines()[0])
+    assert row["rule_action"] == "BUY"
+    assert row["gemini_action"] == "WAIT"  # 門番として止めた形が記録される
