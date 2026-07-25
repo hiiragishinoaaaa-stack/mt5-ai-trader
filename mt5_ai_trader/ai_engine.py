@@ -497,6 +497,11 @@ class CandleThrottledEngine(AIEngine):
             )
 
         signal = self._inner.decide(df)
+        if signal.details.get("error"):
+            # 失敗は判断ではないのでキャッシュしない。キャッシュすると、通信が
+            # 一瞬こけただけでそのローソク足の間ずっとAI判断が出なくなり、
+            # 呼び出し側の再試行もキャッシュを返すだけになって効かなくなる。
+            return signal
         self._last_candle_time = latest_time
         self._cached_signal = signal
         return signal

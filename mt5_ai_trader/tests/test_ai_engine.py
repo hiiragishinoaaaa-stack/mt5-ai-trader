@@ -7,10 +7,12 @@ import pytest
 
 import config
 from ai_engine import (
+    AIEngine,
     CandleThrottledEngine,
     RuleBasedAIEngine,
     Signal,
     describe_market_conditions,
+    error_signal,
     get_ai_engine,
     get_shadow_engine,
     parse_llm_signal_json,
@@ -550,3 +552,54 @@ def test_candle_throttled_engine_calls_inner_on_empty_dataframe():
 
     assert inner.calls == 1
     assert signal.action == "BUY"
+
+
+# --- CandleThrottledEngine: 失敗はキャッシュしない ------------------------------
+
+
+class _FlakyEngine(AIEngine):
+    """1回目は失敗し、2回目以降は判断を返すエンジン。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, df: pd.DataFrame) -> Signal:
+        self.calls += 1
+        if self.calls == 1:
+            return error_signal("API呼び出しに失敗しました", 429)
+        return Signal("BUY", "復帰後の判断", {}, confidence=60.0)
+
+
+def _one_candle_df() -> pd.DataFrame:
+    return pd.DataFrame({"time": [pd.Timestamp("2026-01-01 00:00")], "close": [150.0]})
+
+
+def test_throttled_engine_does_not_cache_failures():
+    """失敗をキャッシュすると、通信が一瞬こけただけでそのローソク足の間ずっと
+    判断が出なくなり、呼び出し側の再試行も効かなくなる。
+    """
+    inner = _FlakyEngine()
+    engine = CandleThrottledEngine(inner)
+    df = _one_candle_df()
+
+    first = engine.decide(df)
+    second = engine.decide(df)  # 同じローソク足でも、失敗後なら再度呼ばれる
+
+    assert first.details["error"]
+    assert inner.calls == 2
+    assert second.action == "BUY"
+    assert "error" not in second.details
+
+
+def test_throttled_engine_still_caches_successful_judgements():
+    inner = _FlakyEngine()
+    inner.calls = 1  # 1回目の失敗を消費済みにして、以降は成功する状態にする
+    engine = CandleThrottledEngine(inner)
+    df = _one_candle_df()
+
+    engine.decide(df)
+    calls_after_first = inner.calls
+    cached = engine.decide(df)
+
+    assert inner.calls == calls_after_first  # 2度目はAPIを呼ばない
+    assert "再利用" in cached.reason
