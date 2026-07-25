@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 
@@ -78,8 +79,13 @@ class GeminiEngine(AIEngine):
                 "gemini_engine: API呼び出しに失敗しました: HTTP %s %s (model=%s version=%s) %s",
                 exc.code, exc.reason, config.GEMINI_MODEL, config.GEMINI_API_VERSION, detail,
             )
+            # レート制限の本文には "Please retry in 12.34s" のように待つべき
+            # 秒数が入る。推測で待つより正確なので拾って呼び出し側へ渡す。
+            match = re.search(r"retry in ([0-9.]+)s", detail)
             return error_signal(
-                f"Gemini API呼び出しに失敗しました(HTTP {exc.code}: {exc.reason})", exc.code
+                f"Gemini API呼び出しに失敗しました(HTTP {exc.code}: {exc.reason})",
+                exc.code,
+                float(match.group(1)) if match else None,
             )
         except (urllib.error.URLError, OSError, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("gemini_engine: API呼び出しに失敗しました: %s", exc)

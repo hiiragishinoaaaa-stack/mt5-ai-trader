@@ -279,8 +279,12 @@ def call_engine(engine, df: pd.DataFrame, retries: int, backoff_seconds: float) 
         signal = engine.decide(df)
         if signal.details.get("http_status") != 429 or attempt == retries:
             return signal
-        print(f"      (レート制限。{backoff_seconds:.0f}秒待って再試行します)")
-        time.sleep(backoff_seconds)
+        # サーバーが待つべき秒数を教えてくれるならそれに従う(短すぎても長すぎても
+        # 無駄になるため)。教えてくれない場合だけこちらの既定値を使う。
+        suggested = signal.details.get("retry_after_seconds")
+        wait = min(max(float(suggested) + 1.0, 1.0), 120.0) if suggested else backoff_seconds
+        print(f"      (レート制限。{wait:.0f}秒待って再試行します)")
+        time.sleep(wait)
     return signal
 
 

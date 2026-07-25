@@ -574,3 +574,42 @@ def test_main_excludes_failed_calls_from_agreement(tmp_path, monkeypatch, capsys
     out = capsys.readouterr().out
     assert "集計から除外" in out
     assert "判断の一致率" not in out  # 比較できた回が無いので一致率も出さない
+
+
+def test_call_engine_obeys_the_server_suggested_wait(monkeypatch, capsys):
+    """レート制限の応答が待ち時間を指定してきたら、それに従う。"""
+    from ai_engine import error_signal
+
+    slept: list[float] = []
+    monkeypatch.setattr(ai_dry_run.time, "sleep", slept.append)
+
+    class _Engine(AIEngine):
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, df):
+            self.calls += 1
+            if self.calls == 1:
+                return error_signal("制限", 429, retry_after_seconds=12.5)
+            return Signal("BUY", "復帰", {}, confidence=50.0)
+
+    ai_dry_run.call_engine(_Engine(), pd.DataFrame(), retries=1, backoff_seconds=30.0)
+
+    # 指定12.5秒 + 余裕1秒。既定の30秒は使わない
+    assert slept == [pytest.approx(13.5)]
+    assert "14秒待って" in capsys.readouterr().out
+
+
+def test_call_engine_falls_back_to_default_wait_without_a_suggestion(monkeypatch):
+    from ai_engine import error_signal
+
+    slept: list[float] = []
+    monkeypatch.setattr(ai_dry_run.time, "sleep", slept.append)
+
+    class _Engine(AIEngine):
+        def decide(self, df):
+            return error_signal("制限", 429)
+
+    ai_dry_run.call_engine(_Engine(), pd.DataFrame(), retries=1, backoff_seconds=25.0)
+
+    assert slept == [25.0]

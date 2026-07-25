@@ -39,7 +39,9 @@ class Signal:
     confidence: float = 0.0
 
 
-def error_signal(reason: str, http_status: int | None = None) -> Signal:
+def error_signal(
+    reason: str, http_status: int | None = None, retry_after_seconds: float | None = None
+) -> Signal:
     """判断ではなく「判断できなかった」ことを表すWAIT。
 
     LLMエンジンはAPIエラー時もWAITへフォールバックする(発注を止めるため
@@ -51,6 +53,10 @@ def error_signal(reason: str, http_status: int | None = None) -> Signal:
     details: dict[str, Any] = {"error": reason}
     if http_status is not None:
         details["http_status"] = http_status
+    if retry_after_seconds is not None:
+        # レート制限の応答は「あと何秒待てばよいか」を教えてくれる。
+        # 呼び出し側が推測で待つより、この値に従うほうが待ち時間も無駄も少ない。
+        details["retry_after_seconds"] = retry_after_seconds
     return Signal("WAIT", reason, details)
 
 
