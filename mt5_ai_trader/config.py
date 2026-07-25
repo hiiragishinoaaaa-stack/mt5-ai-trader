@@ -454,7 +454,10 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 # 上限内なら無課金)。ローソク足更新時のみ呼ぶ節約設計(CandleThrottledEngine)
 # と組み合わせれば、実質無料で運用できる想定。
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# 既定は世代を固定しないエイリアス。特定世代(例: gemini-2.5-flash)を指すと、
+# Googleがその世代の新規提供を終了した時点で404になり、しかもモデル一覧には
+# 残るため原因が分かりにくい(実際に踏んだ)。世代を固定したい場合のみ上書きする。
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 # Generative Language APIのバージョン。モデルによって公開されている
 # バージョンが違い、合っていないと generateContent が404を返す
 # (401/403ではないので「キーが無効」と誤読しやすい)。

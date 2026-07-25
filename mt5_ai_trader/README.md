@@ -504,7 +504,7 @@ GoogleのAPIを呼び出してBUY/SELL/WAITを判断させる(`openai_engine.py`
    ```
    AI_ENGINE=gemini
    GEMINI_API_KEY=...
-   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_MODEL=gemini-flash-latest
    ```
 
 2. `settings_server.py`・`main.py`を再起動する(または既にDashboardから
