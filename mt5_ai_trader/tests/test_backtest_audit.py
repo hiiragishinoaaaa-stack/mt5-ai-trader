@@ -460,6 +460,71 @@ def test_hour_of_day_analysis_splits_halves_and_covers_hours():
         assert 0 <= row.hour <= 23
 
 
+def _fade_stalls_candles(n: int) -> pd.DataFrame:
+    """追従は必ず決着し、逆張りはほぼ決着しない相場を人工的に作る。
+
+    終値は常に100.00。安値99.88は BUY追従のSL(99.90)を毎バー割るので、
+    追従は必ず「負け」で決着する。一方 SELL逆張りが決着するには
+    99.85以下(TP)か100.10以上(SL)が必要で、10本に1本だけ現れる
+    安値99.80のバーまで届かない限り決着しない。
+    """
+    rows = []
+    t = 1700000000
+    for i in range(n):
+        low = 99.80 if i % 10 == 0 else 99.88
+        rows.append({"time": t, "open": 100.0, "high": 100.02, "low": low, "close": 100.0, "spread": 0})
+        t += 900
+    df = pd.DataFrame(rows)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    return df
+
+
+def test_hour_of_day_counts_follow_independently_of_fade():
+    """追従と逆張りは別々の分母で数える(生存バイアスの回帰テスト)。
+
+    旧実装は逆張りが期限内に決着しないとそのバーを丸ごと捨てていた。追従が
+    勝つときは価格がTPまで進む過程で必ず逆張りのSLを通過するため逆張りも
+    決着するが、追従が負けるとき(価格がSLに触れただけ)は逆張りが未決着で
+    残りうる。結果として「勝ちは必ず残り、負けの一部だけ消える」形になり、
+    勝率とEVが実際より良く出てしまっていた。
+
+    ここでは追従だけが必ず決着する相場を用意する。両者を巻き込んで捨てる
+    実装では追従件数と逆張り件数が必ず一致するので、一致しないことが
+    独立に数えている証拠になる。
+    """
+    candles = _fade_stalls_candles(400)
+    bars = [
+        AuditBar(
+            index=i,
+            time=candles.iloc[i]["time"],
+            close=100.0,
+            h1_direction="BUY",
+            adx=None,
+            regime=None,
+            rsi=None,
+            ema_dist_atr=None,
+            atr_points=100.0,
+            macd_hist=None,
+        )
+        for i in range(len(candles) - 5)
+    ]
+
+    rows = audit.hour_of_day_analysis(
+        candles, bars, 0.001, sl_atr_mult=1.0, rr=1.5, sample_step=1, max_horizon=2
+    )
+
+    assert rows
+    follow_total = sum(r.trades_first + r.trades_second for r in rows)
+    fade_total = sum(r.fade_trades_first + r.fade_trades_second for r in rows)
+    assert follow_total > 0
+    # 追従は毎バー決着し、逆張りは安値99.80が2本以内に来たときだけ決着する
+    assert follow_total > fade_total
+    # 追従は全て負けなので、EVはコスト無しでも -1R でなければならない
+    for r in rows:
+        assert r.ev_follow_first == pytest.approx(-1.0)
+        assert r.ev_follow_second == pytest.approx(-1.0)
+
+
 def test_hour_of_day_analysis_empty_without_usable_bars():
     candles = _synthetic_candles(300)
     assert audit.hour_of_day_analysis(candles, [], 0.001, 2.0, 1.5) == []

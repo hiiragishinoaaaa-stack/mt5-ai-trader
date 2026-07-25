@@ -575,7 +575,7 @@ def geometry_sweep(
         for rr in rr_ratios:
             sl_list: list[float] = []
             wins = follow_r = fade_r = 0.0
-            trades = unresolved = 0
+            trades = unresolved = fade_trades = 0
             for b in usable:
                 sl_pts = mult * b.atr_points
                 tp_pts = rr * sl_pts
@@ -606,6 +606,10 @@ def geometry_sweep(
                 wins += follow
                 follow_r += (rr if follow == 1 else -1.0) - cost_r
                 if fade >= 0:
+                    # 逆張り側は決着した件数だけで平均する。追従側の件数で割ると、
+                    # 未決着の逆張りを「損益0のトレード」として数えることになり、
+                    # 逆張りEVが不当に0へ引き寄せられる。
+                    fade_trades += 1
                     fade_r += (rr if fade == 1 else -1.0) - cost_r
             if not trades:
                 continue
@@ -623,7 +627,7 @@ def geometry_sweep(
                     breakeven_rate=breakeven_win_rate(median_sl, rr * median_sl, spread_median),
                     required_delta_pp=required,
                     ev_r_follow=follow_r / trades,
-                    ev_r_fade=fade_r / trades,
+                    ev_r_fade=fade_r / fade_trades if fade_trades else 0.0,
                 )
             )
     return rows, atr_median, spread_median
@@ -670,6 +674,12 @@ class HourRow:
     hour: int
     trades_first: int
     trades_second: int
+    # 逆張り側は決着する条件が追従側と違うため、件数(=EVの分母)も別になる。
+    # 追従件数と一致しないのが正常で、一致してしまう実装は両者を巻き込んで
+    # 捨てている(生存バイアス)ことを意味する。
+    fade_trades_first: int
+    fade_trades_second: int
+    unresolved_pct: float
     ev_follow_first: float
     ev_follow_second: float
     ev_fade_first: float
@@ -711,8 +721,16 @@ def hour_of_day_analysis(
         return []
 
     midpoint = pd.Timestamp(usable[len(usable) // 2].time)
-    # half=0(前半) / 1(後半) ごとに [件数, follow合計R, fade合計R] を持つ
-    acc: dict[tuple[int, int], list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
+    # half=0(前半) / 1(後半) ごとに
+    # [follow件数, follow合計R, fade件数, fade合計R, 未決着数] を持つ。
+    #
+    # follow と fade は必ず**別々に**数える。片方が未決着だからといって
+    # 両方を捨てると、深刻な生存バイアスが入る: followが勝つときは価格が
+    # TP(+1.5SL)まで進むので途中で必ずfadeのSL(+1SL)を通過し、fadeも決着
+    # する。一方followが負けるとき(価格が-1SLに触れただけ)はfadeが未決着
+    # のまま残りうる。つまり「勝ちは必ず残り、負けの一部だけ消える」形に
+    # なり、勝率とEVが実際より良く出てしまう。
+    acc: dict[tuple[int, int], list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
 
     for b in usable:
         sl_pts = sl_atr_mult * b.atr_points
@@ -729,39 +747,45 @@ def hour_of_day_analysis(
             entry - sl_px if is_buy else entry + sl_px,
             is_buy,
         )
-        if follow < 0:
-            continue
         fade = scan(
             b.index,
             entry - tp_px if is_buy else entry + tp_px,
             entry + sl_px if is_buy else entry - sl_px,
             not is_buy,
         )
-        if fade < 0:
-            continue
         cost_r = spreads[b.index] / sl_pts
         t = pd.Timestamp(b.time)
-        key = (int(t.hour), 0 if t < midpoint else 1)
-        cell = acc[key]
-        cell[0] += 1
-        cell[1] += (rr if follow == 1 else -1.0) - cost_r
-        cell[2] += (rr if fade == 1 else -1.0) - cost_r
+        cell = acc[(int(t.hour), 0 if t < midpoint else 1)]
+        if follow >= 0:
+            cell[0] += 1
+            cell[1] += (rr if follow == 1 else -1.0) - cost_r
+        else:
+            cell[4] += 1
+        if fade >= 0:
+            cell[2] += 1
+            cell[3] += (rr if fade == 1 else -1.0) - cost_r
 
     rows: list[HourRow] = []
     for hour in range(24):
         first = acc.get((hour, 0))
         second = acc.get((hour, 1))
-        if not first or not second or first[0] == 0 or second[0] == 0:
+        if not first or not second:
             continue
+        if min(first[0], second[0], first[2], second[2]) == 0:
+            continue
+        attempted = first[0] + second[0] + first[4] + second[4]
         rows.append(
             HourRow(
                 hour=hour,
                 trades_first=int(first[0]),
                 trades_second=int(second[0]),
+                fade_trades_first=int(first[2]),
+                fade_trades_second=int(second[2]),
+                unresolved_pct=(first[4] + second[4]) / attempted * 100 if attempted else 0.0,
                 ev_follow_first=first[1] / first[0],
                 ev_follow_second=second[1] / second[0],
-                ev_fade_first=first[2] / first[0],
-                ev_fade_second=second[2] / second[0],
+                ev_fade_first=first[3] / first[2],
+                ev_fade_second=second[3] / second[2],
             )
         )
     return rows
@@ -774,10 +798,13 @@ def run_hour_of_day(rows: list[HourRow], sl_atr_mult: float, rr: float) -> None:
         "偶然プラスに見える時間帯は必ず出るため、**前半・後半の両方でプラス**の行だけが候補。\n"
         "片方だけプラスの行はノイズとして捨てること。\n"
     )
-    print(f"{'UTC時':<6}{'件数(前)':>9}{'件数(後)':>9}{'追従(前)':>10}{'追従(後)':>10}{'逆張(前)':>10}{'逆張(後)':>10}")
+    print(
+        f"{'UTC時':<6}{'件数(前)':>9}{'件数(後)':>9}{'未決済%':>8}"
+        f"{'追従(前)':>10}{'追従(後)':>10}{'逆張(前)':>10}{'逆張(後)':>10}"
+    )
     for r in rows:
         print(
-            f"{r.hour:<6}{r.trades_first:>9}{r.trades_second:>9}"
+            f"{r.hour:<6}{r.trades_first:>9}{r.trades_second:>9}{r.unresolved_pct:>8.1f}"
             f"{r.ev_follow_first:>+10.3f}{r.ev_follow_second:>+10.3f}"
             f"{r.ev_fade_first:>+10.3f}{r.ev_fade_second:>+10.3f}"
         )
