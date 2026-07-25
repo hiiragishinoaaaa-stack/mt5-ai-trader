@@ -30,6 +30,9 @@ Gemini Flashには無料枠があるが、大きな件数を指定しないこ�
 from __future__ import annotations
 
 import argparse
+import json
+import urllib.error
+import urllib.request
 
 import pandas as pd
 
@@ -37,6 +40,62 @@ import config
 import indicators
 from ai_engine import RuleBasedAIEngine, Signal, describe_market_conditions, get_ai_engine
 from backtest_replay import load_candles
+
+_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+
+def list_gemini_models() -> None:
+    """このAPIキーで実際に使えるGeminiモデル名を一覧する(切り分け用)。
+
+    generateContentが404を返すとき、原因は「キーが無効」ではなく
+    「そのモデル名がこのキーから見えない」であることが多い(キーが無効なら
+    401/403になる)。ここでモデル一覧が取れれば認証は通っており、あとは
+    config.GEMINI_MODELを一覧にある名前へ合わせればよい。
+
+    APIキーはクエリ文字列ではなくヘッダで送る。エラー応答の本文に
+    リクエストURLが含まれてもキーが漏れないようにするため。
+    表示するのはモデル名とHTTPステータスだけで、キーは決して出力しない。
+    """
+    if not config.GEMINI_API_KEY:
+        print("GEMINI_API_KEY が未設定です(.env を確認してください)。")
+        return
+
+    req = urllib.request.Request(_MODELS_URL, headers={"x-goog-api-key": config.GEMINI_API_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        print(f"モデル一覧の取得に失敗しました: HTTP {exc.code} {exc.reason}")
+        if exc.code in (401, 403):
+            print("→ 認証エラー。APIキー自体が無効か、種類が違います。")
+            print("   Google AI Studio (https://aistudio.google.com/apikey) で作る")
+            print("   Gemini APIキーは 'AIza' で始まります。別の値なら作り直してください。")
+        else:
+            print("→ 認証以外の問題です。ネットワーク/プロキシ設定も確認してください。")
+        return
+    except urllib.error.URLError as exc:
+        print(f"モデル一覧の取得に失敗しました(接続エラー): {exc.reason}")
+        return
+
+    models = payload.get("models", [])
+    usable = [
+        m["name"].removeprefix("models/")
+        for m in models
+        if "generateContent" in m.get("supportedGenerationMethods", [])
+    ]
+    if not usable:
+        print("このキーで generateContent を使えるモデルが見つかりませんでした。")
+        return
+
+    print(f"認証は成功しました。generateContent を使えるモデル {len(usable)} 件:")
+    for name in usable:
+        mark = "  ← 現在の設定" if name == config.GEMINI_MODEL else ""
+        print(f"  {name}{mark}")
+    if config.GEMINI_MODEL not in usable:
+        print(
+            f"\n現在の GEMINI_MODEL={config.GEMINI_MODEL} は一覧にありません。これが404の原因です。"
+            f"\n.env に GEMINI_MODEL=<上の一覧から選んだ名前> を追記してください。"
+        )
 
 
 def iter_windows(candles: pd.DataFrame, bars_count: int, count: int, step: int):
@@ -75,7 +134,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="保存済みの過去データでAI判断エンジンを走らせ、ルール判断と並べて表示する(発注しない)"
     )
-    parser.add_argument("--candles-file", required=True, help="ARTEMIS_HistoryExport.mq5が書き出したJSON")
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="このAPIキーで使えるGeminiモデル名を一覧する(404の切り分け用)。キーは表示しない",
+    )
+    parser.add_argument("--candles-file", help="ARTEMIS_HistoryExport.mq5が書き出したJSON")
     parser.add_argument(
         "--engine",
         default="gemini",
@@ -91,6 +155,12 @@ def main() -> None:
     parser.add_argument("--bars-count", type=int, default=None, help="既定: config.BARS_COUNT(本番と揃えること)")
     parser.add_argument("--show-prompt", action="store_true", help="LLMへ実際に渡している文面を表示する")
     args = parser.parse_args()
+
+    if args.list_models:
+        list_gemini_models()
+        return
+    if not args.candles_file:
+        parser.error("--candles-file を指定してください(--list-models のときは不要)")
 
     bars_count = args.bars_count or config.BARS_COUNT
 

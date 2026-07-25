@@ -175,3 +175,66 @@ def test_main_reports_when_history_too_short(tmp_path, monkeypatch, capsys):
     ai_dry_run.main()
 
     assert "ウィンドウを切り出せませんでした" in capsys.readouterr().out
+
+
+# --- --list-models(404の切り分け) ---------------------------------------------
+
+
+def test_list_models_reports_missing_key(monkeypatch, capsys):
+    monkeypatch.setattr("config.GEMINI_API_KEY", "")
+
+    ai_dry_run.list_gemini_models()
+
+    assert "GEMINI_API_KEY が未設定" in capsys.readouterr().out
+
+
+def test_list_models_flags_configured_model_as_unavailable(monkeypatch, capsys):
+    """404の典型原因(設定中のモデル名が一覧に無い)をはっきり指摘する。"""
+    body = json.dumps(
+        {
+            "models": [
+                {"name": "models/gemini-1.5-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/embed-only", "supportedGenerationMethods": ["embedContent"]},
+            ]
+        }
+    ).encode("utf-8")
+
+    class _Resp:
+        def read(self):
+            return body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+    monkeypatch.setattr("config.GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(ai_dry_run.urllib.request, "urlopen", lambda *a, **k: _Resp())
+
+    ai_dry_run.list_gemini_models()
+
+    out = capsys.readouterr().out
+    assert "gemini-1.5-flash" in out
+    assert "embed-only" not in out  # generateContent非対応は出さない
+    assert "404の原因です" in out
+    assert "dummy-key" not in out  # キーは決して表示しない
+
+
+def test_list_models_explains_auth_error(monkeypatch, capsys):
+    import urllib.error
+
+    monkeypatch.setattr("config.GEMINI_API_KEY", "dummy-key")
+
+    def _raise(*a, **k):
+        raise urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(ai_dry_run.urllib.request, "urlopen", _raise)
+
+    ai_dry_run.list_gemini_models()
+
+    out = capsys.readouterr().out
+    assert "HTTP 403" in out
+    assert "AIza" in out  # 正しいキー形式を案内する
+    assert "dummy-key" not in out
