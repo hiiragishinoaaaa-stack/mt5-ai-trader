@@ -450,14 +450,78 @@ def test_evaluate_conditions_empty_when_indicators_missing():
 # --- describe_market_conditions ---------------------------------------------
 
 
+def _df_with_indicators() -> pd.DataFrame:
+    """指標付きの十分な長さの系列(上位足の集約に必要な本数を確保する)。"""
+    rows = []
+    price = 150.0
+    t = pd.Timestamp("2026-01-05 09:00")  # 月曜
+    for i in range(400):
+        price += 0.01 if i % 2 == 0 else -0.005
+        rows.append(
+            _row(
+                open=price,
+                close=price + 0.002,
+                high=price + 0.02,
+                low=price - 0.02,
+                ema_fast=price + 0.01,
+                ema_slow=price,
+                rsi=55.0,
+                macd_hist=0.01,
+                adx=22.0,
+                time=t + pd.Timedelta(minutes=15 * i),
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+
+
 def test_describe_market_conditions_includes_symbol_and_indicators():
-    df = pd.DataFrame([_row(close=151.234, rsi=61.2)])
+    df = _df_with_indicators()
     text = describe_market_conditions(df, "USDJPY", "M15")
 
     assert "USDJPY" in text
-    assert "M15" in text
-    assert "151.234" in text
-    assert "61.2" in text
+    assert "RSI" in text
+
+
+def test_describe_market_conditions_states_the_cost_hurdle():
+    """コスト条件(ランダムを何pp上回る必要があるか)を必ず伝える。
+
+    これが無いとLLMは「上がりそうか」しか答えられず、スプレッドを踏まえて
+    見送る判断ができない。判断材料の中で最も重要な行。
+    """
+    df = _df_with_indicators()
+    text = describe_market_conditions(df, "USDJPY", "M15")
+
+    assert "コスト条件" in text
+    assert "ポイント上回る" in text
+
+
+def test_describe_market_conditions_includes_higher_timeframes_and_structure():
+    """指標だけでなく、上位足の並びと素の値動きを渡す。"""
+    df = _df_with_indicators()
+    text = describe_market_conditions(df, "USDJPY", "M15")
+
+    assert "上位足から見た並び" in text
+    assert "レンジの" in text  # 直近レンジ内での位置
+
+
+def test_describe_market_conditions_warns_that_indicators_alone_are_not_enough():
+    """検証で棄却済みの材料を、根拠として使わせないための注意書き。"""
+    df = _df_with_indicators()
+    text = describe_market_conditions(df, "USDJPY", "M15")
+
+    assert "指標だけでは方向を当てられない" in text
+
+
+def test_system_prompt_does_not_bias_toward_waiting():
+    """旧プロンプトの「断定的すぎる判断は避けて」は、WAIT偏重を招いていた。
+    見送りが常に安全なわけではないことを明示する。
+    """
+    from ai_engine import LLM_SYSTEM_PROMPT
+
+    assert "断定的すぎる判断は避け" not in LLM_SYSTEM_PROMPT
+    assert "安全ではありません" in LLM_SYSTEM_PROMPT
 
 
 # --- parse_llm_signal_json ---------------------------------------------------
@@ -603,3 +667,23 @@ def test_throttled_engine_still_caches_successful_judgements():
 
     assert inner.calls == calls_after_first  # 2度目はAPIを呼ばない
     assert "再利用" in cached.reason
+
+
+def test_describe_market_conditions_survives_missing_columns():
+    """列が欠けても例外を出さない。
+
+    エンジン側のtry/exceptはAPI呼び出しだけを包んでいるので、ここで例外を
+    出すと判断が丸ごと止まる(WAITへのフォールバックすら効かない)。
+    """
+    minimal = pd.DataFrame([{"close": 150.0, "ema_fast": 150.1, "rsi": 55.0}])
+
+    text = describe_market_conditions(minimal, "USDJPY", "M15")
+
+    assert "USDJPY" in text
+    assert "RSI" in text
+
+
+def test_describe_market_conditions_handles_empty_dataframe():
+    text = describe_market_conditions(pd.DataFrame(), "USDJPY", "M15")
+
+    assert "ローソク足データがありません" in text

@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 
 import config
@@ -513,32 +514,163 @@ class CandleThrottledEngine(AIEngine):
         return signal
 
 
-def describe_market_conditions(df: pd.DataFrame, symbol: str, timeframe: str) -> str:
-    """LLM判断エンジン(OpenAIEngine/ClaudeEngine)向けに、直近の指標状況を
-    テキスト化する。RuleBasedAIEngineが使うのと同じ指標(EMA/RSI/MACD)を
-    渡すことで、判断材料をルールベースと揃えている。
+def _timeframe_minutes(timeframe: str) -> int:
+    """"M15"のような時間足表記を分に直す。未知の表記は15分として扱う。"""
+    unit = timeframe[:1].upper()
+    try:
+        value = int(timeframe[1:])
+    except ValueError:
+        return 15
+    return {"M": value, "H": value * 60, "D": value * 1440}.get(unit, 15)
+
+
+def _higher_timeframe_view(df: pd.DataFrame, base_minutes: int, factor: int, label: str) -> str:
+    """基準足をfactor本ずつ束ねて、上位足から見た並びを1行にする。
+
+    上位足を別途取得せずに済むよう、同じ系列を集約して作る。方向性の
+    エッジは短い足ほど薄いことが分かっているため(RESEARCH_FINDINGS.md
+    確定事項2)、判断材料には必ず上位足の姿を含める。
     """
+    if "close" not in df.columns:
+        return f"{label}: データ不足"
+    closes = df["close"].to_numpy(dtype=float)
+    # 末尾から factor 本ずつ束ねた終値(古い順に最大6本)。系列が短いときは
+    # 取れるだけにする。2本未満では変化を語れないのでデータ不足として扱う。
+    buckets = min(6, len(closes) // factor)
+    if buckets < 2:
+        return f"{label}: データ不足"
+    bucket_closes = [float(closes[-(i + 1) * factor]) for i in range(buckets)][::-1]
+    change = (bucket_closes[-1] - bucket_closes[0]) / bucket_closes[0] * 100
+    direction = "上昇" if change > 0 else ("下降" if change < 0 else "横ばい")
+    return f"{label}: {[round(v, 3) for v in bucket_closes]} ({direction} {change:+.2f}%)"
+
+
+def describe_market_conditions(df: pd.DataFrame, symbol: str, timeframe: str) -> str:
+    """LLM判断エンジン向けに、相場の状況をテキスト化する。
+
+    ## 何を渡すかの方針
+
+    以前はRuleBasedAIEngineと同じ指標(EMA/RSI/MACD)だけを渡していた。しかし
+    その情報セットには方向の予測力が無いことが4年2通貨の監査で確定している
+    (RESEARCH_FINDINGS.md 確定事項2)。同じ材料を読ませる限り、LLMは棄却済み
+    ルールを非決定的に再現するだけになる。
+
+    そこで、指標の値そのものより**指標にできない情報**を厚く渡す:
+
+    - 上位足から見た並び(方向性のエッジは短い足ほど薄い)
+    - 直近レンジの中での位置、高値安値の更新状況といった素の値動き
+    - ボラティリティと**スプレッドの比**、および「ランダムを何pp上回れば
+      損益がプラスになるか」という損益分岐の条件(確定事項1)
+    - 時間帯・曜日(価格の変換では表現できない外生的な構造)
+
+    最後の損益分岐を渡すのが要点で、これが無いとLLMは「上がりそうか」しか
+    答えられない。コストを踏まえて「見送るべきか」を判断させるために要る。
+    """
+    if df.empty:
+        return f"銘柄: {symbol} / 基準足: {timeframe}\nローソク足データがありません。"
     latest = df.iloc[-1]
-    recent_closes = [round(float(v), 5) for v in df["close"].tail(10).tolist()]
-    return (
-        f"銘柄: {symbol} / 時間足: {timeframe}\n"
-        f"直近の終値(古い順、最大10件): {recent_closes}\n"
-        f"現在値(close): {latest.get('close')}\n"
-        f"EMA(短期): {latest.get('ema_fast')}\n"
-        f"EMA(長期): {latest.get('ema_slow')}\n"
-        f"RSI: {latest.get('rsi')}\n"
-        f"MACD: {latest.get('macd')}\n"
-        f"MACDシグナル: {latest.get('macd_signal')}\n"
-        f"MACDヒストグラム: {latest.get('macd_hist')}\n"
+    close = float(latest["close"]) if "close" in df.columns else float("nan")
+    base_minutes = _timeframe_minutes(timeframe)
+
+    atr = float(latest["atr"]) if "atr" in df.columns and not pd.isna(latest.get("atr")) else None
+    atr_points = atr / config.POINT_SIZE if atr and config.POINT_SIZE > 0 else None
+    spread_points = float(latest["spread"]) if "spread" in df.columns and not pd.isna(latest.get("spread")) else None
+
+    lines = [
+        f"銘柄: {symbol} / 基準足: {timeframe}",
+        f"現在値: {close}",
+    ]
+
+    # --- 上位足から見た並び ---
+    lines.append("")
+    lines.append("【上位足から見た並び(古い順)】")
+    for factor, label in ((1, f"{timeframe}"), (4, f"{timeframe}x4"), (16, f"{timeframe}x16"), (96, "日足相当")):
+        lines.append("  " + _higher_timeframe_view(df, base_minutes, factor, label))
+
+    # --- 素の値動き(指標を通さない情報) ---
+    # 列が欠けていても判断自体は続けられるようにする(欠けた節を省くだけ)。
+    # ここで例外を出すと、エンジン側のtry/except(API呼び出しのみを包む)を
+    # すり抜けて判断が丸ごと止まってしまう。
+    highs = df["high"].to_numpy(dtype=float) if "high" in df.columns else np.empty(0)
+    lows = df["low"].to_numpy(dtype=float) if "low" in df.columns else np.empty(0)
+    for window, name in ((24, "直近24本"), (96, "直近96本")):
+        if len(highs) >= window and len(lows) >= window:
+            hi = float(highs[-window:].max())
+            lo = float(lows[-window:].min())
+            pos = (close - lo) / (hi - lo) * 100 if hi > lo else 50.0
+            lines.append(
+                f"{name}: 高値{hi:.3f} / 安値{lo:.3f} / 現在はレンジの{pos:.0f}%の位置"
+            )
+
+    # --- ボラティリティとコスト(ここが判断の分かれ目) ---
+    lines.append("")
+    lines.append("【コスト条件】")
+    if atr_points:
+        lines.append(f"  ATR(1本あたりの値幅): {atr_points:.0f}pt")
+        if spread_points is not None:
+            lines.append(f"  スプレッド: {spread_points:.0f}pt (ATRの{spread_points / atr_points * 100:.0f}%)")
+            sl_points = config.AI_CONTEXT_SL_ATR_MULT * atr_points
+            tp_points = config.AI_CONTEXT_RR * sl_points
+            required = spread_points / (sl_points + tp_points) * 100
+            lines.append(
+                f"  想定する決済: 損切り{sl_points:.0f}pt / 利確{tp_points:.0f}pt"
+                f"(ATRの{config.AI_CONTEXT_SL_ATR_MULT:g}倍、リスクリワード1:{config.AI_CONTEXT_RR:g})"
+            )
+            lines.append(
+                f"  この条件で利益が出るには、ランダムに賭けた場合の勝率を"
+                f"**{required:.1f}ポイント上回る**必要がある。"
+            )
+    else:
+        lines.append("  ATRが計算できていません。")
+
+    # --- 時間帯(価格からは導けない情報) ---
+    if "time" in df.columns and not pd.isna(latest.get("time")):
+        t = pd.Timestamp(latest["time"])
+        weekday = ["月", "火", "水", "木", "金", "土", "日"][t.weekday()]
+        session = (
+            "東京" if 0 <= t.hour < 7 else
+            "ロンドン" if 7 <= t.hour < 12 else
+            "ロンドン・NY重複" if 12 <= t.hour < 16 else
+            "NY" if 16 <= t.hour < 21 else "薄商い"
+        )
+        lines.append("")
+        lines.append(f"【時間】UTC {t.hour:02d}時台 / {weekday}曜 / 主なセッション: {session}")
+
+    # --- 参考指標(あくまで補助) ---
+    lines.append("")
+    lines.append("【参考: テクニカル指標】")
+    for key, name in (
+        ("ema_fast", "EMA短期"), ("ema_slow", "EMA長期"), ("rsi", "RSI"),
+        ("macd_hist", "MACDヒストグラム"), ("adx", "ADX"),
+    ):
+        value = latest.get(key)
+        if value is not None and not pd.isna(value):
+            lines.append(f"  {name}: {float(value):.3f}")
+    lines.append(
+        "  ※これらの指標だけでは方向を当てられないことが、4年2通貨の検証で"
+        "確認されている。指標の一致だけを根拠にしないこと。"
     )
+    return "\n".join(lines)
 
 
 LLM_SYSTEM_PROMPT = (
-    "あなたはFXトレードの判断アシスタントです。与えられたテクニカル指標のみに基づいて "
-    "BUY・SELL・WAITのいずれかを判断してください。根拠が不十分、あるいは指標が矛盾して "
-    "いる場合は必ずWAITを選んでください。断定的すぎる判断は避けてください。"
+    "あなたはFXの売買判断を任されたトレーダーです。BUY・SELL・WAITのいずれかを決めてください。\n"
+    "\n"
+    "重要な前提: 渡されるテクニカル指標(EMA/RSI/MACD/ADX)だけでは方向を当てられないことが、"
+    "4年・2通貨・約2万トレードの検証で確認されています。指標が揃っていることを根拠にしないでください。"
+    "指標より、上位足から見た並び・レンジ内の位置・値動きの素の形・時間帯を重視してください。\n"
+    "\n"
+    "コストの扱いが最も重要です。プロンプトには『ランダムに賭けた場合の勝率を何ポイント上回る必要があるか』"
+    "が示されます。取引すればスプレッドを必ず払うため、その分を超えて有利だと言える根拠が無い場面では"
+    "WAITを選んでください。逆に、根拠があると判断したなら確信度を正直に高くつけて構いません。"
+    "無難にWAITを選び続けることは、機会を捨てているだけで安全ではありません。\n"
+    "\n"
+    "confidenceは『ランダムより有利だと思う度合い』です。50は五分五分(=取引すべきでない)、"
+    "60以上はランダムより明確に有利だと考える場合に使ってください。\n"
+    "\n"
     "出力は次の形式のJSONオブジェクトのみとし、それ以外の文章(前置き・コードブロック等)は"
-    '一切含めないでください: {"action": "BUY", "reason": "短い理由(日本語)", "confidence": 0から100の整数}'
+    '一切含めないでください: {"action": "BUY", "reason": "判断の根拠(日本語、100字以内)", '
+    '"confidence": 0から100の整数}'
 )
 
 

@@ -463,6 +463,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 # (401/403ではないので「キーが無効」と誤読しやすい)。
 # 使える組み合わせは ai_dry_run.py --list-models で確認できる。
 GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta")
+
+# LLMに提示する想定決済(describe_market_conditions参照)。ここから
+# 「ランダムを何pp上回れば利益が出るか」を計算して判断材料に含める。
+# 既定はジオメトリ掃引でコスト負けしにくかった水準
+# (RESEARCH_FINDINGS.md 確定事項1)。実際の発注SL/TPとは独立で、
+# あくまでLLMにコスト条件を伝えるための基準。
+AI_CONTEXT_SL_ATR_MULT = _env_float("AI_CONTEXT_SL_ATR_MULT", 6.0)
+AI_CONTEXT_RR = _env_float("AI_CONTEXT_RR", 1.5)
 AI_ENGINE_TIMEOUT_SECONDS = _env_int("AI_ENGINE_TIMEOUT_SECONDS", 20)
 
 # --- Geminiシャドーモード(2026-07、Fable5との相談を踏まえて追加) ---
