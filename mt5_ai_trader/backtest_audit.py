@@ -622,11 +622,18 @@ def run_geometry(rows: list[GeometryRow], atr_median: float, spread_median: floa
         "系統的トレードで現実的に得られるエッジは1〜3pp程度。必要Δpがそれを超える行は、\n"
         "入口ロジックを何に変えても数学的に届かない。\n"
     )
-    print(f"{'SL幅':<10}{'RR':>6}{'SL(pt)':>9}{'取引数':>9}{'勝率%':>8}{'分岐%':>8}{'必要Δp':>9}{'EV追従':>9}{'EV逆張':>9}")
+    print(
+        f"{'SL幅':<10}{'RR':>6}{'SL(pt)':>9}{'取引数':>9}{'未決済%':>8}{'勝率%':>8}"
+        f"{'分岐%':>8}{'必要Δp':>9}{'EV追従':>9}{'EV逆張':>9}"
+    )
     for r in rows:
+        # 未決済(--max-horizon以内にSLもTPも触れず)は集計から落ちる。SLを広げる
+        # ほど増えるので、この比率が高い行は残った取引だけを見ている点に注意。
+        attempted = r.trades + r.unresolved
+        unresolved_pct = r.unresolved / attempted * 100 if attempted else 0.0
         print(
             f"{r.sl_atr_mult:<10.2g}{'1:' + format(r.rr, '.3g'):>6}{r.median_sl_points:>9.0f}"
-            f"{r.trades:>9}{r.win_rate:>8.1f}{r.breakeven_rate:>8.1f}"
+            f"{r.trades:>9}{unresolved_pct:>8.1f}{r.win_rate:>8.1f}{r.breakeven_rate:>8.1f}"
             f"{r.required_delta_pp:>8.1f}p{r.ev_r_follow:>+9.3f}{r.ev_r_fade:>+9.3f}"
         )
     best = max(rows, key=lambda r: max(r.ev_r_follow, r.ev_r_fade), default=None)
