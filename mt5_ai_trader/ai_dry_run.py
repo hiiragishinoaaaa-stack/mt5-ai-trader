@@ -373,6 +373,12 @@ def main() -> None:
         default="gemini",
         help="比較対象のAIエンジン(gemini / openai / claude / rule_based)。既定: gemini",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="このコマンドの間だけモデルを差し替える(.envを編集せずに機種比較するため)。"
+        "Geminiなら GEMINI_MODEL、OpenAI/Claudeなら各社のモデル設定を上書きする",
+    )
     parser.add_argument("--count", type=int, default=3, help="判断させる件数(=API呼び出し回数)。既定3")
     parser.add_argument(
         "--step",
@@ -407,6 +413,16 @@ def main() -> None:
         return
     if not args.candles_file:
         parser.error("--candles-file を指定してください(--list-models のときは不要)")
+
+    if args.model:
+        # 同じ窓を別モデルへ通して比べられるように、実行中だけ設定を差し替える。
+        # .envを書き換える運用だと比較の途中で条件がズレやすい。
+        setting = {"gemini": "GEMINI_MODEL", "openai": "OPENAI_MODEL", "claude": "CLAUDE_MODEL"}.get(args.engine)
+        if setting and hasattr(config, setting):
+            setattr(config, setting, args.model)
+            print(f"モデルを {args.model} に差し替えて実行します({setting})。")
+        else:
+            print(f"警告: --engine {args.engine} にはモデル差し替えの設定がありません。無視します。")
 
     bars_count = args.bars_count or config.BARS_COUNT
 

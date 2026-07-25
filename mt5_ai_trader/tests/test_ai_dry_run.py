@@ -613,3 +613,40 @@ def test_call_engine_falls_back_to_default_wait_without_a_suggestion(monkeypatch
     ai_dry_run.call_engine(_Engine(), pd.DataFrame(), retries=1, backoff_seconds=25.0)
 
     assert slept == [25.0]
+
+
+def test_main_model_override_applies_for_the_run(tmp_path, monkeypatch, capsys):
+    """--model は .env を書き換えずにモデルを差し替える(機種比較用)。"""
+    import config
+
+    path = _write_history(tmp_path, 400)
+    monkeypatch.setattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite")
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _StubEngine("BUY"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100",
+            "--count", "1", "--engine", "gemini", "--model", "gemini-3.1-pro-preview",
+        ],
+    )
+
+    ai_dry_run.main()
+
+    assert config.GEMINI_MODEL == "gemini-3.1-pro-preview"
+    assert "モデルを gemini-3.1-pro-preview に差し替えて" in capsys.readouterr().out
+
+
+def test_main_model_override_warns_for_unknown_engine(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 400)
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _StubEngine("BUY"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100",
+            "--count", "1", "--engine", "rule_based", "--model", "なにか",
+        ],
+    )
+
+    ai_dry_run.main()
+
+    assert "モデル差し替えの設定がありません" in capsys.readouterr().out
