@@ -54,6 +54,13 @@ def test_breakeven_win_rate_rr_1_to_2():
     assert breakeven_win_rate(200, 400) == pytest.approx(33.333, abs=0.01)
 
 
+def test_breakeven_win_rate_includes_spread():
+    """pnlからスプレッドを引く以上、分岐点もスプレッド込みでなければならない。
+    SL=100/TP=200/s=15 なら 33.3%ではなく 115/300 = 38.3%。
+    """
+    assert breakeven_win_rate(100, 200, 15) == pytest.approx(38.333, abs=0.01)
+
+
 def test_breakeven_win_rate_rr_1_to_1():
     assert breakeven_win_rate(200, 200) == pytest.approx(50.0)
 
@@ -302,6 +309,96 @@ def test_compute_period_bars_computes_metrics_without_conditions():
     assert bar.rsi is not None
     assert bar.macd_hist is not None
     assert bar.regime in ("TRENDING", "RANGING", None)
+
+
+# --- ジオメトリ掃引(--geometry)モード -----------------------------------------
+
+
+def test_geometry_sweep_returns_row_per_combination():
+    candles = _synthetic_candles(600)
+    bars = audit.compute_period_bars(candles, bars_count=100, point_size=0.001)
+
+    rows, atr_median, spread_median = audit.geometry_sweep(
+        candles, bars, 0.001, [1.0, 2.0], [1.0, 2.0], sample_step=3, max_horizon=64
+    )
+
+    assert len(rows) == 4  # 2つのSL幅 × 2つのRR
+    assert atr_median > 0
+    assert spread_median == 2.0  # _synthetic_candlesはspread=2
+    for row in rows:
+        assert row.trades > 0
+        assert 0.0 <= row.win_rate <= 100.0
+
+
+def test_geometry_sweep_required_delta_shrinks_as_targets_widen():
+    """必要Δp = スプレッド/(SL+TP)。狙いを広げるほど必要なエッジは小さくなる
+    ——これがこの監査の核心。
+    """
+    candles = _synthetic_candles(600)
+    bars = audit.compute_period_bars(candles, bars_count=100, point_size=0.001)
+
+    rows, _, _ = audit.geometry_sweep(
+        candles, bars, 0.001, [0.5, 3.0], [2.0], sample_step=3, max_horizon=64
+    )
+    narrow = next(r for r in rows if r.sl_atr_mult == 0.5)
+    wide = next(r for r in rows if r.sl_atr_mult == 3.0)
+
+    assert wide.required_delta_pp < narrow.required_delta_pp
+    # SL幅を6倍にすれば必要Δpはおよそ1/6になる
+    assert wide.required_delta_pp == pytest.approx(narrow.required_delta_pp / 6, rel=0.1)
+
+
+def test_geometry_sweep_spread_override_beats_candle_spread():
+    candles = _synthetic_candles(400)
+    bars = audit.compute_period_bars(candles, bars_count=100, point_size=0.001)
+
+    _, _, spread_median = audit.geometry_sweep(
+        candles, bars, 0.001, [1.0], [2.0], spread_points_override=30.0, sample_step=5, max_horizon=64
+    )
+
+    assert spread_median == 30.0
+
+
+def test_main_geometry_runs_end_to_end(tmp_path, monkeypatch, capsys):
+    candles = _synthetic_candles(600)
+    payload = {
+        "symbol": "USDJPY",
+        "timeframe": "M15",
+        "exported_at": int(candles.iloc[-1]["time"].timestamp()),
+        "candles": [
+            {
+                "time": int(row.time.timestamp()),
+                "open": row.open,
+                "high": row.high,
+                "low": row.low,
+                "close": row.close,
+                "spread": 2,
+            }
+            for row in candles.itertuples()
+        ],
+    }
+    candles_file = tmp_path / "history.json"
+    candles_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backtest_audit.py",
+            "--candles-file", str(candles_file),
+            "--bars-count", "100",
+            "--geometry",
+            "--sl-atr-mults", "1", "2",
+            "--rr-ratios", "2",
+            "--sample-step", "5",
+        ],
+    )
+
+    audit.main()
+
+    out = capsys.readouterr().out
+    assert "出口ジオメトリ検証" in out
+    assert "必要Δp" in out
+    assert "現行設定" in out
 
 
 def test_main_by_period_runs_end_to_end(tmp_path, monkeypatch, capsys):

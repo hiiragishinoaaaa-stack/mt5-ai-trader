@@ -25,6 +25,12 @@ backtest_replay.pyでの初回検証(USDJPY M15 5000本)で、(1)どの閾値で
 4. **分位分析**: 連続指標(RSI/EMA乖離/ATR/MACDヒストグラム)を分位に区切り、
    各分位からのエントリー成績の単調性を見る。
 5. 1〜4を**ADXレジーム(トレンド/レンジ)別**にも分けて出力する。
+6. **出口ジオメトリ検証(--geometry)**: SL幅(ATR倍率)×RRを掃引し、そもそも
+   期待値がプラスになり得る形が存在するかを測る。EV = p*(SL+TP) - SL - s
+   より、ランダムを上回る必要幅は Δp = s/(SL+TP) で、**入口ロジックではなく
+   SL+TPの大きさだけで決まる**。SLがATRと同程度だと必要Δpが8pp規模になり、
+   系統的エッジの現実的な上限(1〜3pp)を超えるため、入口を何に変えても勝てない。
+   1〜5(入口の議論)より先に確認すべき前提条件。
 
 ## 共通の前提
 
@@ -203,11 +209,18 @@ def _result(trades: list[ReplayTrade]) -> ReplayResult:
     return r
 
 
-def breakeven_win_rate(sl_points: float, tp_points: float) -> float:
-    """SL/TP先着方式でトントンになる勝率(%)。RR=tp/sl、breakeven=1/(1+RR)。"""
+def breakeven_win_rate(sl_points: float, tp_points: float, spread_points: float = 0.0) -> float:
+    """SL/TP先着方式でトントンになる勝率(%)。
+
+    1トレードの期待値は EV = p*(TP - s) + (1-p)*(-SL - s) = p*(SL+TP) - SL - s
+    なので、EV=0 となる勝率は (SL + s) / (SL + TP)。スプレッドsを無視すると
+    SL/(SL+TP) になるが、pnlからはスプレッドを差し引いている以上、
+    比較すべき基準線もスプレッド込みでなければ勝敗の判定を誤る
+    (SL=100/TP=200/s=15なら 33.3%ではなく38.3%が本当の分岐点)。
+    """
     if sl_points + tp_points <= 0:
         return 0.0
-    return sl_points / (sl_points + tp_points) * 100
+    return (sl_points + spread_points) / (sl_points + tp_points) * 100
 
 
 def baseline_result(audit_bars: list[AuditBar], outcomes: dict[tuple[int, str], ReplayTrade]) -> ReplayResult:
@@ -327,7 +340,9 @@ def _run_and_print(audit_bars: list[AuditBar], outcomes, breakeven: float, heade
 _QUANTILE_METRICS = (("rsi", "RSI"), ("ema_dist_atr", "EMA乖離/ATR"), ("atr_points", "ATR(pt)"), ("macd_hist", "MACDヒスト"))
 
 
-def compute_period_bars(candles: pd.DataFrame, bars_count: int) -> list[AuditBar]:
+def compute_period_bars(
+    candles: pd.DataFrame, bars_count: int, point_size: float | None = None
+) -> list[AuditBar]:
     """--by-period分析用の軽量版。条件別成否(evaluate_conditions)は計算せず、
     分位分析・レジーム・ベースラインに必要な指標(RSI/EMA乖離/ATR/MACD/ADX/
     H1方向)だけを、全系列に対して1回add_indicators()して求める。
@@ -340,6 +355,8 @@ def compute_period_bars(candles: pd.DataFrame, bars_count: int) -> list[AuditBar
     """
     enriched = indicators.add_indicators(candles)
     threshold = config.ADX_TREND_THRESHOLD
+    if point_size is None:
+        point_size = config.POINT_SIZE
 
     # H1方向を全系列で1回だけリサンプルして求める(production
     # _h1_trend_directionの高速近似)。
@@ -365,7 +382,7 @@ def compute_period_bars(candles: pd.DataFrame, bars_count: int) -> list[AuditBar
         regime = None if adx is None else ("TRENDING" if adx >= threshold else "RANGING")
         atr = float(latest["atr"]) if "atr" in enriched.columns and not pd.isna(latest["atr"]) else None
         ema_dist = (float(latest["close"]) - float(latest["ema_fast"])) / atr if atr and atr > 0 else None
-        atr_points = atr / config.POINT_SIZE if atr and config.POINT_SIZE > 0 else None
+        atr_points = atr / point_size if atr and point_size > 0 else None
         h1_direction = None
         if h1_dir_values is not None:
             t = pd.Timestamp(candles.iloc[i]["time"])
@@ -454,6 +471,175 @@ def run_by_period(bars: list[AuditBar], outcomes, discovery_days: int, breakeven
         print(f"{jp:<14}" + "".join(cells))
 
 
+@dataclass
+class GeometryRow:
+    """1つの出口ジオメトリ(SL幅×RR)の成績。EVはリスク1R(=SL幅)単位。"""
+
+    sl_atr_mult: float
+    rr: float
+    median_sl_points: float
+    trades: int
+    unresolved: int
+    win_rate: float
+    breakeven_rate: float
+    required_delta_pp: float  # ランダム(=SL/(SL+TP))を何pp上回る必要があるか
+    ev_r_follow: float
+    ev_r_fade: float
+
+
+def geometry_sweep(
+    candles: pd.DataFrame,
+    bars: list[AuditBar],
+    point_size: float,
+    sl_atr_mults: list[float],
+    rr_ratios: list[float],
+    spread_points_override: float | None = None,
+    sample_step: int = 5,
+    max_horizon: int = 192,
+    optimistic_fill: bool = False,
+) -> tuple[list[GeometryRow], float, float]:
+    """出口ジオメトリ(SL幅とRR)そのものを掃引して、勝てる形が存在するかを測る。
+
+    ## なぜこの監査が必要か
+
+    1トレードの期待値は EV = p*(SL+TP) - SL - s (p=TP先着率、s=スプレッド)。
+    ドリフトの無いランダムウォークでは p = SL/(SL+TP) なので EV = -s、つまり
+    **どんなジオメトリでもランダムなら期待値はきっかりスプレッド分のマイナス**
+    になる。よって勝つには、ランダムを Δp = s / (SL+TP) だけ上回る必要がある。
+
+    ここが決定的で、必要なΔpは**入口ロジックではなくSL+TPの大きさで決まる**。
+    SL=100/TP=200・s=24なら必要Δpは8.0ppに達し、これは系統的トレードの現実的な
+    エッジ(1〜3pp)を大きく超える。逆にSL+TPを6倍に広げれば必要Δpは1.3ppまで
+    下がる。条件チューニングで拾えるのは数ppなので、まず「そもそも勝ち得る
+    ジオメトリか」を確認しないと、入口の議論は全て徒労になる。
+
+    SL幅はATR倍率で与える(固定pointだとボラティリティ局面ごとに意味が変わる)。
+    スプレッドはローソク足に記録された実測値を既定で使う(--spread-pointsで
+    上書き可)。比較のため、H1方向への追従(follow)と逆張り(fade)の両方のEVを出す。
+    """
+    highs = candles["high"].to_numpy(dtype=float)
+    lows = candles["low"].to_numpy(dtype=float)
+    n = len(highs)
+    if "spread" in candles.columns and spread_points_override is None:
+        spreads = candles["spread"].to_numpy(dtype=float)
+    else:
+        fill = 0.0 if spread_points_override is None else spread_points_override
+        spreads = np.full(n, fill, dtype=float)
+
+    usable = [
+        b for b in bars[::sample_step]
+        if b.h1_direction in ("BUY", "SELL") and b.atr_points and b.atr_points > 0
+    ]
+    atr_median = float(np.median([b.atr_points for b in usable])) if usable else 0.0
+    spread_median = float(np.median(spreads)) if n else 0.0
+
+    def scan(entry_idx: int, entry: float, tp_price: float, sl_price: float, is_buy: bool) -> int:
+        """1=TP先着, 0=SL先着, -1=期間内に未決済。同一バーで両方到達した場合は
+        バー内の順序が分からないため、既定では悲観側(SL先着)に倒す。"""
+        end = min(n, entry_idx + 1 + max_horizon)
+        for k in range(entry_idx + 1, end):
+            hi = highs[k]
+            lo = lows[k]
+            if is_buy:
+                hit_tp = hi >= tp_price
+                hit_sl = lo <= sl_price
+            else:
+                hit_tp = lo <= tp_price
+                hit_sl = hi >= sl_price
+            if hit_tp and hit_sl:
+                return 1 if optimistic_fill else 0
+            if hit_tp:
+                return 1
+            if hit_sl:
+                return 0
+        return -1
+
+    rows: list[GeometryRow] = []
+    for mult in sl_atr_mults:
+        for rr in rr_ratios:
+            sl_list: list[float] = []
+            wins = follow_r = fade_r = 0.0
+            trades = unresolved = 0
+            for b in usable:
+                sl_pts = mult * b.atr_points
+                tp_pts = rr * sl_pts
+                if sl_pts <= 0:
+                    continue
+                entry = b.close
+                sl_px = sl_pts * point_size
+                tp_px = tp_pts * point_size
+                is_buy = b.h1_direction == "BUY"
+                follow = scan(
+                    b.index, entry,
+                    entry + tp_px if is_buy else entry - tp_px,
+                    entry - sl_px if is_buy else entry + sl_px,
+                    is_buy,
+                )
+                if follow < 0:
+                    unresolved += 1
+                    continue
+                fade = scan(
+                    b.index, entry,
+                    entry - tp_px if is_buy else entry + tp_px,
+                    entry + sl_px if is_buy else entry - sl_px,
+                    not is_buy,
+                )
+                cost_r = spreads[b.index] / sl_pts  # スプレッドをリスク単位へ換算
+                trades += 1
+                sl_list.append(sl_pts)
+                wins += follow
+                follow_r += (rr if follow == 1 else -1.0) - cost_r
+                if fade >= 0:
+                    fade_r += (rr if fade == 1 else -1.0) - cost_r
+            if not trades:
+                continue
+            median_sl = float(np.median(sl_list))
+            # 必要Δp = s/(SL+TP)。SLはバーごとに違うので中央値で代表させる。
+            required = spread_median / (median_sl * (1.0 + rr)) * 100 if median_sl > 0 else 0.0
+            rows.append(
+                GeometryRow(
+                    sl_atr_mult=mult,
+                    rr=rr,
+                    median_sl_points=median_sl,
+                    trades=trades,
+                    unresolved=unresolved,
+                    win_rate=wins / trades * 100,
+                    breakeven_rate=breakeven_win_rate(median_sl, rr * median_sl, spread_median),
+                    required_delta_pp=required,
+                    ev_r_follow=follow_r / trades,
+                    ev_r_fade=fade_r / trades,
+                )
+            )
+    return rows, atr_median, spread_median
+
+
+def run_geometry(rows: list[GeometryRow], atr_median: float, spread_median: float) -> None:
+    print("=== 出口ジオメトリ検証(H1方向へ無条件エントリー、実測スプレッド適用) ===")
+    print(f"M15 ATR中央値 = {atr_median:.0f}pt / 実測スプレッド中央値 = {spread_median:.0f}pt")
+    print(
+        "EVは1トレードの期待損益をリスク1R(=SL幅)単位で表示。EV>0が最低条件。\n"
+        "必要Δp = スプレッドを埋めるために『ランダム(=分岐勝率)を何pp上回る必要があるか』。\n"
+        "系統的トレードで現実的に得られるエッジは1〜3pp程度。必要Δpがそれを超える行は、\n"
+        "入口ロジックを何に変えても数学的に届かない。\n"
+    )
+    print(f"{'SL幅':<10}{'RR':>6}{'SL(pt)':>9}{'取引数':>9}{'勝率%':>8}{'分岐%':>8}{'必要Δp':>9}{'EV追従':>9}{'EV逆張':>9}")
+    for r in rows:
+        print(
+            f"{r.sl_atr_mult:<10.2g}{'1:' + format(r.rr, '.3g'):>6}{r.median_sl_points:>9.0f}"
+            f"{r.trades:>9}{r.win_rate:>8.1f}{r.breakeven_rate:>8.1f}"
+            f"{r.required_delta_pp:>8.1f}p{r.ev_r_follow:>+9.3f}{r.ev_r_fade:>+9.3f}"
+        )
+    best = max(rows, key=lambda r: max(r.ev_r_follow, r.ev_r_fade), default=None)
+    if best is not None:
+        side = "追従" if best.ev_r_follow >= best.ev_r_fade else "逆張り"
+        ev = max(best.ev_r_follow, best.ev_r_fade)
+        print(
+            f"\n最良: SL={best.sl_atr_mult:g}xATR / RR=1:{best.rr:g} の{side} (EV={ev:+.3f}R)。"
+            + ("EV>0なので、この形なら入口の改良が意味を持つ。" if ev > 0
+               else "全ての形でEV<0。まず出口/コスト構造を変えない限り勝てない。")
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RuleBasedAIEngineの条件別エッジ監査ツール")
     parser.add_argument("--candles-file", required=True, help="ARTEMIS_HistoryExport.mq5が書き出したJSONファイル")
@@ -478,6 +664,38 @@ def main() -> None:
         "期間比較を出力する。データ拡張時はこちらを使う)",
     )
     parser.add_argument(
+        "--geometry",
+        action="store_true",
+        help="出口ジオメトリ(SL幅×RR)を掃引し、そもそも期待値がプラスになり得る形が"
+        "存在するかを検証する。入口条件の議論より先に確認すべき前提",
+    )
+    parser.add_argument(
+        "--sl-atr-mults",
+        type=float,
+        nargs="+",
+        default=[0.5, 1.0, 2.0, 3.0],
+        help="--geometry時に試すSL幅(ATR倍率)。既定: 0.5 1 2 3",
+    )
+    parser.add_argument(
+        "--rr-ratios",
+        type=float,
+        nargs="+",
+        default=[1.0, 1.5, 2.0, 3.0],
+        help="--geometry時に試すリスクリワード比(TP=RR×SL)。既定: 1 1.5 2 3",
+    )
+    parser.add_argument(
+        "--sample-step",
+        type=int,
+        default=5,
+        help="--geometry時、何本おきにエントリーを試すか(既定5。小さいほど精密だが遅い)",
+    )
+    parser.add_argument(
+        "--max-horizon",
+        type=int,
+        default=192,
+        help="--geometry時、決済を待つ最大バー数(既定192=M15で約2日)",
+    )
+    parser.add_argument(
         "--discovery-days",
         type=int,
         default=52,
@@ -489,7 +707,7 @@ def main() -> None:
     bars_count = args.bars_count or config.BARS_COUNT
     sl_points = args.sl_points if args.sl_points is not None else config.SL_POINTS
     tp_points = args.tp_points if args.tp_points is not None else config.TP_POINTS
-    breakeven = breakeven_win_rate(sl_points, tp_points)
+    breakeven = breakeven_win_rate(sl_points, tp_points, args.spread_points)
 
     if args.all_conditions:
         config.REQUIRE_TRENDING_REGIME = True
@@ -510,9 +728,39 @@ def main() -> None:
 
     fee_note = f"、往復スプレッド{args.spread_points}pt考慮" if args.spread_points else "、スプレッド未考慮"
 
+    if args.geometry:
+        print(f"{len(candles)}本を読み込みました。指標を計算しています(軽量版)...")
+        bars = compute_period_bars(candles, bars_count, point_size)
+        if not bars:
+            print("分析できるバーがありませんでした(本数不足の可能性)。")
+            return
+        print(f"{len(bars)}バーから{args.sample_step}本おきにジオメトリを掃引しています...\n")
+        rows, atr_median, spread_median = geometry_sweep(
+            candles,
+            bars,
+            point_size,
+            args.sl_atr_mults,
+            args.rr_ratios,
+            spread_points_override=args.spread_points or None,
+            sample_step=args.sample_step,
+            max_horizon=args.max_horizon,
+            optimistic_fill=args.optimistic_fill,
+        )
+        if not rows:
+            print("掃引できる組み合わせがありませんでした。")
+            return
+        run_geometry(rows, atr_median, spread_median)
+        # 現行設定が同じ土俵でどこに位置するかを示す(比較の基準)。
+        cur_required = spread_median / (sl_points + tp_points) * 100
+        print(
+            f"\n参考: 現行設定 SL={sl_points:g}pt / TP={tp_points:g}pt は "
+            f"SL={sl_points / atr_median:.2f}xATR 相当、必要Δp={cur_required:.1f}pp。"
+        )
+        return
+
     if args.by_period:
         print(f"{len(candles)}本を読み込みました。期間別分析用に指標を計算しています(軽量版)...")
-        bars = compute_period_bars(candles, bars_count)
+        bars = compute_period_bars(candles, bars_count, point_size)
         if not bars:
             print("分析できるバーがありませんでした(本数不足の可能性)。")
             return
