@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -267,6 +268,22 @@ def score_line(signal: Signal) -> str | None:
     )
 
 
+def call_engine(engine, df: pd.DataFrame, retries: int, backoff_seconds: float) -> Signal:
+    """AIエンジンを呼ぶ。レート制限(429)なら待って数回まで再試行する。
+
+    無料枠には1分あたりの回数制限があり、まとめて投げると429で弾かれる。
+    弾かれた回もWAIT扱いで返ってくるため、そのまま集計すると「AIが見送った」
+    ように見えてしまう。ここで吸収して、本当に判断が取れた回だけを残す。
+    """
+    for attempt in range(retries + 1):
+        signal = engine.decide(df)
+        if signal.details.get("http_status") != 429 or attempt == retries:
+            return signal
+        print(f"      (レート制限。{backoff_seconds:.0f}秒待って再試行します)")
+        time.sleep(backoff_seconds)
+    return signal
+
+
 @dataclass
 class Verdict:
     """1件の判断とその後の実際の結果。"""
@@ -277,7 +294,7 @@ class Verdict:
 
     @property
     def mark(self) -> str:
-        return {1: "○ 的中", 0: "× 外れ", -1: "△ 未決着", -2: "— 見送り"}[self.outcome]
+        return {1: "○ 的中", 0: "× 外れ", -1: "△ 未決着", -2: "— 見送り", -3: "! 判断できず"}[self.outcome]
 
 
 def evaluate_action(
@@ -290,6 +307,7 @@ def evaluate_action(
     spread_points: float,
     sl_atr_mult: float,
     rr: float,
+    failed: bool = False,
 ) -> Verdict:
     """判断どおりに入っていたら、その後どうなったかを実データで採点する。
 
@@ -298,6 +316,10 @@ def evaluate_action(
     損益0として扱い、勝敗の分母からも外す。取引しない判断を「外れ」と数えると、
     危ない場面を避ける動き(=フィルターとしての価値)が評価できなくなるため。
     """
+    if failed:
+        # APIエラー等でWAITに落ちた回。相場を見て見送ったわけではないので、
+        # 見送りとしても外れとしても数えない(集計から完全に外す)。
+        return Verdict(action, -3, 0.0)
     if action not in ("BUY", "SELL"):
         return Verdict(action, -2, 0.0)
 
@@ -319,11 +341,12 @@ def evaluate_action(
 def summarise(name: str, verdicts: list[Verdict]) -> str:
     traded = [v for v in verdicts if v.outcome in (0, 1)]
     skipped = sum(1 for v in verdicts if v.outcome == -2)
+    failed = sum(1 for v in verdicts if v.outcome == -3)
     if not traded:
-        return f"{name:<8}{'-':>8}{'-':>8}{'-':>10}{skipped:>10}"
+        return f"{name:<8}{'-':>8}{'-':>8}{'-':>10}{skipped:>10}{failed:>10}"
     wins = sum(1 for v in traded if v.outcome == 1)
     ev = sum(v.ev_r for v in traded) / len(traded)
-    return f"{name:<8}{len(traded):>8}{wins:>8}{ev:>+10.3f}{skipped:>10}"
+    return f"{name:<8}{len(traded):>8}{wins:>8}{ev:>+10.3f}{skipped:>10}{failed:>10}"
 
 
 def main() -> None:
@@ -363,6 +386,13 @@ def main() -> None:
     )
     parser.add_argument("--eval-rr", type=float, default=1.5, help="採点に使うリスクリワード比。既定1.5")
     parser.add_argument("--no-evaluate", action="store_true", help="判断後の結果を採点しない(表示のみ)")
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=6.0,
+        help="API呼び出しの間隔(秒)。既定6(無料枠の毎分制限に当たらない程度)。0で無効",
+    )
+    parser.add_argument("--retries", type=int, default=2, help="レート制限(429)時の再試行回数。既定2")
     args = parser.parse_args()
 
     if args.list_models:
@@ -395,7 +425,7 @@ def main() -> None:
     spreads = candles["spread"].to_numpy(dtype=float) if "spread" in candles.columns else None
     scan, _ = _make_forward_scanner(candles, max_horizon=480, optimistic_fill=False)
 
-    agreements = 0
+    agreements = comparable = 0
     rule_verdicts: list[Verdict] = []
     ai_verdicts: list[Verdict] = []
 
@@ -422,6 +452,7 @@ def main() -> None:
             return evaluate_action(
                 signal.action, scan, end_index, close, atr_points, point_size,
                 spread, args.eval_sl_mult, args.eval_rr,
+                failed=bool(signal.details.get("error")),
             )
 
         rule_signal = rule_engine.decide(enriched)
@@ -434,29 +465,38 @@ def main() -> None:
             rule_verdicts.append(rule_verdict)
             print(f"      結果: {rule_verdict.mark}")
 
-        ai_signal = ai_engine.decide(enriched)
+        if args.sleep > 0 and i > 1:
+            time.sleep(args.sleep)
+        ai_signal = call_engine(ai_engine, enriched, args.retries, max(args.sleep, 30.0))
         ai_verdict = judge(ai_signal)
         print(f"  AI({args.engine}) : {format_signal(ai_signal)}")
         if ai_verdict:
             ai_verdicts.append(ai_verdict)
             print(f"      結果: {ai_verdict.mark}")
 
-        same = rule_signal.action == ai_signal.action
-        agreements += same
-        print(f"  → 判断は{'一致' if same else '不一致'}\n")
+        if ai_signal.details.get("error"):
+            print("  → AIの判断が取れなかったため、この回は集計から除外します\n")
+        else:
+            comparable += 1
+            same = rule_signal.action == ai_signal.action
+            agreements += same
+            print(f"  → 判断は{'一致' if same else '不一致'}\n")
 
     if rule_verdicts or ai_verdicts:
         print(f"=== 採点(SL={args.eval_sl_mult:g}xATR / RR=1:{args.eval_rr:g}、実測スプレッド適用) ===")
-        print(f"{'':<8}{'取引数':>8}{'的中':>8}{'EV(R)':>10}{'見送り':>10}")
+        print(f"{'':<8}{'取引数':>8}{'的中':>8}{'EV(R)':>10}{'見送り':>10}{'判断不能':>10}")
         print(summarise("ルール", rule_verdicts))
         print(summarise(args.engine, ai_verdicts))
         print(
             "\nEV(R)は1取引あたりの期待損益(リスク1R=SL幅)。プラスなら勝ち越し。"
             "\n見送り(WAIT)は取引しないので分母から外している。危ない場面を避ける動きは"
             "\n「取引数が減り、EVが上がる」形で現れる。"
+            "\n判断不能はAPIエラー等で判断自体が取れなかった回。見送りとは別に数え、"
+            "\n集計には一切含めない(通信エラーを『慎重に見送った』と誤解しないため)。"
         )
 
-    print(f"\n判断の一致率: {agreements}/{len(windows)} ({agreements / len(windows) * 100:.0f}%)")
+    if comparable:
+        print(f"\n判断の一致率: {agreements}/{comparable} ({agreements / comparable * 100:.0f}%)")
     print(
         "※一致率は成績ではない。ルール側は4年の監査でエッジ無しと確定しているので、"
         "\n  一致するほど良いわけではない(RESEARCH_FINDINGS.md 確定事項2)。見るべきはEV(R)。"

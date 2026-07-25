@@ -18,7 +18,7 @@ import urllib.request
 import pandas as pd
 
 import config
-from ai_engine import AIEngine, LLM_SYSTEM_PROMPT, Signal, describe_market_conditions, parse_llm_signal_json
+from ai_engine import AIEngine, LLM_SYSTEM_PROMPT, Signal, describe_market_conditions, error_signal, parse_llm_signal_json
 
 logger = logging.getLogger("mt5_ai_trader")
 
@@ -32,10 +32,10 @@ class ClaudeEngine(AIEngine):
 
     def decide(self, df: pd.DataFrame) -> Signal:
         if not config.ANTHROPIC_API_KEY:
-            return Signal("WAIT", "ANTHROPIC_API_KEYが未設定です(.envで設定してください)", {})
+            return error_signal("ANTHROPIC_API_KEYが未設定です(.envで設定してください)")
 
         if df.empty:
-            return Signal("WAIT", "ローソク足データが空です", {})
+            return error_signal("ローソク足データが空です")
 
         prompt = describe_market_conditions(df, config.SYMBOL, config.TIMEFRAME)
 
@@ -65,10 +65,10 @@ class ClaudeEngine(AIEngine):
             content = payload["content"][0]["text"]
         except (urllib.error.URLError, OSError, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("claude_engine: API呼び出しに失敗しました: %s", exc)
-            return Signal("WAIT", f"Claude API呼び出しに失敗しました({exc})", {})
+            return error_signal(f"Claude API呼び出しに失敗しました({exc})")
 
         try:
             return parse_llm_signal_json(content)
         except ValueError as exc:
             logger.warning("claude_engine: レスポンスの解析に失敗しました: %s (content=%s)", exc, content)
-            return Signal("WAIT", f"Claudeの応答を解析できませんでした({exc})", {})
+            return error_signal(f"Claudeの応答を解析できませんでした({exc})")

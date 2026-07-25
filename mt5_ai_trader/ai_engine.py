@@ -39,6 +39,21 @@ class Signal:
     confidence: float = 0.0
 
 
+def error_signal(reason: str, http_status: int | None = None) -> Signal:
+    """判断ではなく「判断できなかった」ことを表すWAIT。
+
+    LLMエンジンはAPIエラー時もWAITへフォールバックする(発注を止めるため
+    これが正しい)。ただしそれは相場を見て見送ったのではないので、成績を
+    集計するときは判断としてのWAITと混ぜてはいけない。混ぜると、通信が
+    落ちていただけの回が「AIが慎重に見送った」ように見えてしまう。
+    集計側はdetails["error"]の有無でこの2つを区別する。
+    """
+    details: dict[str, Any] = {"error": reason}
+    if http_status is not None:
+        details["http_status"] = http_status
+    return Signal("WAIT", reason, details)
+
+
 class AIEngine(ABC):
     """AI判断エンジンの共通インターフェース。"""
 

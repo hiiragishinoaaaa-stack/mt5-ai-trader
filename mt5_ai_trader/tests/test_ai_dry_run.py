@@ -479,3 +479,98 @@ def test_main_no_evaluate_skips_scoring(tmp_path, monkeypatch, capsys):
     ai_dry_run.main()
 
     assert "採点" not in capsys.readouterr().out
+
+
+# --- API失敗を「見送り」と混同しない --------------------------------------------
+
+
+class _FailingEngine(AIEngine):
+    """本番のLLMエンジンと同じく、失敗時はerror付きWAITへフォールバックする。"""
+
+    def __init__(self, http_status: int | None = None, fail_times: int = 99) -> None:
+        self.http_status = http_status
+        self.fail_times = fail_times
+        self.calls = 0
+
+    def decide(self, df: pd.DataFrame) -> Signal:
+        from ai_engine import error_signal
+
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            return error_signal("API呼び出しに失敗しました", self.http_status)
+        return Signal("BUY", "復帰後の判断", {}, confidence=50.0)
+
+
+def test_evaluate_action_separates_failure_from_a_deliberate_skip():
+    """APIエラーのWAITは、見送りとしても外れとしても数えない。"""
+    failed = ai_dry_run.evaluate_action(
+        "WAIT", lambda *a: 0, 0, 100.0, 100.0, 0.001, 20.0, 6.0, 1.5, failed=True
+    )
+    skipped = ai_dry_run.evaluate_action(
+        "WAIT", lambda *a: 0, 0, 100.0, 100.0, 0.001, 20.0, 6.0, 1.5, failed=False
+    )
+
+    assert failed.outcome == -3
+    assert "判断できず" in failed.mark
+    assert skipped.outcome == -2
+    assert "見送り" in skipped.mark
+
+
+def test_summarise_counts_failures_in_their_own_column():
+    verdicts = [
+        ai_dry_run.Verdict("BUY", 1, 1.4),
+        ai_dry_run.Verdict("WAIT", -2, 0.0),
+        ai_dry_run.Verdict("WAIT", -3, 0.0),
+        ai_dry_run.Verdict("WAIT", -3, 0.0),
+    ]
+
+    line = ai_dry_run.summarise("gemini", verdicts)
+
+    # 取引1 / 的中1 / 見送り1 / 判断不能2
+    assert line.split()[1:3] == ["1", "1"]
+    assert line.endswith("         1         2")
+
+
+def test_call_engine_retries_on_rate_limit_then_succeeds(capsys):
+    engine = _FailingEngine(http_status=429, fail_times=1)
+
+    signal = ai_dry_run.call_engine(engine, pd.DataFrame(), retries=2, backoff_seconds=0.0)
+
+    assert engine.calls == 2
+    assert signal.action == "BUY"
+    assert "レート制限" in capsys.readouterr().out
+
+
+def test_call_engine_gives_up_after_the_retry_budget():
+    engine = _FailingEngine(http_status=429)
+
+    signal = ai_dry_run.call_engine(engine, pd.DataFrame(), retries=1, backoff_seconds=0.0)
+
+    assert engine.calls == 2  # 初回 + 再試行1回
+    assert signal.details["error"]
+
+
+def test_call_engine_does_not_retry_other_errors():
+    engine = _FailingEngine(http_status=404)
+
+    ai_dry_run.call_engine(engine, pd.DataFrame(), retries=3, backoff_seconds=0.0)
+
+    assert engine.calls == 1  # 404は待っても直らないので即あきらめる
+
+
+def test_main_excludes_failed_calls_from_agreement(tmp_path, monkeypatch, capsys):
+    path = _write_history(tmp_path, 600)
+    monkeypatch.setattr(ai_dry_run, "get_ai_engine", lambda name: _FailingEngine(http_status=500))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ai_dry_run.py", "--candles-file", str(path), "--bars-count", "100",
+            "--count", "2", "--step", "50", "--sleep", "0",
+        ],
+    )
+
+    ai_dry_run.main()
+
+    out = capsys.readouterr().out
+    assert "集計から除外" in out
+    assert "判断の一致率" not in out  # 比較できた回が無いので一致率も出さない
