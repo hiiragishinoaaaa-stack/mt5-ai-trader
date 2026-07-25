@@ -471,6 +471,53 @@ def run_by_period(bars: list[AuditBar], outcomes, discovery_days: int, breakeven
         print(f"{jp:<14}" + "".join(cells))
 
 
+def _make_forward_scanner(candles: pd.DataFrame, max_horizon: int, optimistic_fill: bool):
+    """(scan, バー総数)を返す。scanは1=TP先着 / 0=SL先着 / -1=期間内に未決済。
+
+    同一バーでSLとTPの両方に触れた場合、バー内の到達順は日足OHLCからは
+    復元できないため、既定では悲観側(SL先着)に倒す。
+    """
+    highs = candles["high"].to_numpy(dtype=float)
+    lows = candles["low"].to_numpy(dtype=float)
+    n = len(highs)
+
+    def scan(entry_idx: int, tp_price: float, sl_price: float, is_buy: bool) -> int:
+        end = min(n, entry_idx + 1 + max_horizon)
+        for k in range(entry_idx + 1, end):
+            hi = highs[k]
+            lo = lows[k]
+            if is_buy:
+                hit_tp = hi >= tp_price
+                hit_sl = lo <= sl_price
+            else:
+                hit_tp = lo <= tp_price
+                hit_sl = hi >= sl_price
+            if hit_tp and hit_sl:
+                return 1 if optimistic_fill else 0
+            if hit_tp:
+                return 1
+            if hit_sl:
+                return 0
+        return -1
+
+    return scan, n
+
+
+def _spread_series(candles: pd.DataFrame, override: float | None) -> np.ndarray:
+    """バーごとのスプレッド(points)。既定ではローソク足に記録された実測値。"""
+    if "spread" in candles.columns and override is None:
+        return candles["spread"].to_numpy(dtype=float)
+    return np.full(len(candles), 0.0 if override is None else override, dtype=float)
+
+
+def _usable_bars(bars: list[AuditBar], sample_step: int) -> list[AuditBar]:
+    """方向とATRが揃っているバーだけを、sample_step本おきに抜き出す。"""
+    return [
+        b for b in bars[::sample_step]
+        if b.h1_direction in ("BUY", "SELL") and b.atr_points and b.atr_points > 0
+    ]
+
+
 @dataclass
 class GeometryRow:
     """1つの出口ジオメトリ(SL幅×RR)の成績。EVはリスク1R(=SL幅)単位。"""
@@ -517,42 +564,11 @@ def geometry_sweep(
     スプレッドはローソク足に記録された実測値を既定で使う(--spread-pointsで
     上書き可)。比較のため、H1方向への追従(follow)と逆張り(fade)の両方のEVを出す。
     """
-    highs = candles["high"].to_numpy(dtype=float)
-    lows = candles["low"].to_numpy(dtype=float)
-    n = len(highs)
-    if "spread" in candles.columns and spread_points_override is None:
-        spreads = candles["spread"].to_numpy(dtype=float)
-    else:
-        fill = 0.0 if spread_points_override is None else spread_points_override
-        spreads = np.full(n, fill, dtype=float)
-
-    usable = [
-        b for b in bars[::sample_step]
-        if b.h1_direction in ("BUY", "SELL") and b.atr_points and b.atr_points > 0
-    ]
+    scan, n = _make_forward_scanner(candles, max_horizon, optimistic_fill)
+    spreads = _spread_series(candles, spread_points_override)
+    usable = _usable_bars(bars, sample_step)
     atr_median = float(np.median([b.atr_points for b in usable])) if usable else 0.0
     spread_median = float(np.median(spreads)) if n else 0.0
-
-    def scan(entry_idx: int, entry: float, tp_price: float, sl_price: float, is_buy: bool) -> int:
-        """1=TP先着, 0=SL先着, -1=期間内に未決済。同一バーで両方到達した場合は
-        バー内の順序が分からないため、既定では悲観側(SL先着)に倒す。"""
-        end = min(n, entry_idx + 1 + max_horizon)
-        for k in range(entry_idx + 1, end):
-            hi = highs[k]
-            lo = lows[k]
-            if is_buy:
-                hit_tp = hi >= tp_price
-                hit_sl = lo <= sl_price
-            else:
-                hit_tp = lo <= tp_price
-                hit_sl = hi >= sl_price
-            if hit_tp and hit_sl:
-                return 1 if optimistic_fill else 0
-            if hit_tp:
-                return 1
-            if hit_sl:
-                return 0
-        return -1
 
     rows: list[GeometryRow] = []
     for mult in sl_atr_mults:
@@ -570,7 +586,7 @@ def geometry_sweep(
                 tp_px = tp_pts * point_size
                 is_buy = b.h1_direction == "BUY"
                 follow = scan(
-                    b.index, entry,
+                    b.index,
                     entry + tp_px if is_buy else entry - tp_px,
                     entry - sl_px if is_buy else entry + sl_px,
                     is_buy,
@@ -579,7 +595,7 @@ def geometry_sweep(
                     unresolved += 1
                     continue
                 fade = scan(
-                    b.index, entry,
+                    b.index,
                     entry - tp_px if is_buy else entry + tp_px,
                     entry + sl_px if is_buy else entry - sl_px,
                     not is_buy,
@@ -647,6 +663,147 @@ def run_geometry(rows: list[GeometryRow], atr_median: float, spread_median: floa
         )
 
 
+@dataclass
+class HourRow:
+    """1つの時間帯(UTC)の成績。前半/後半に分けて再現性を見えるようにする。"""
+
+    hour: int
+    trades_first: int
+    trades_second: int
+    ev_follow_first: float
+    ev_follow_second: float
+    ev_fade_first: float
+    ev_fade_second: float
+
+
+def hour_of_day_analysis(
+    candles: pd.DataFrame,
+    bars: list[AuditBar],
+    point_size: float,
+    sl_atr_mult: float,
+    rr: float,
+    spread_points_override: float | None = None,
+    sample_step: int = 3,
+    max_horizon: int = 480,
+    optimistic_fill: bool = False,
+) -> list[HourRow]:
+    """時間帯(UTC時)ごとの期待値を、データ前半/後半に分けて測る。
+
+    ## なぜ時間帯なのか
+
+    RSI/EMA/MACD/ADXは全て価格の変換であり、--geometry検証で「情報として
+    出尽くしている(勝率がランダム値に収束する)」ことが2通貨4年で確認された。
+    残っている数少ない直交軸が「いつ取引したか」で、これは価格から導けない
+    外生的な構造(東京/ロンドン/NYのセッション交代、流動性の日内サイクル)を
+    直接指す。
+
+    ## 前半/後半に分ける理由
+
+    24時間を総当たりすれば、エッジが皆無でも偶然良く見える時間帯が必ず数個
+    出る(多重比較)。前半だけ、後半だけで独立に測り、**両方で同じ符号かつ
+    プラス**の時間帯のみを候補とすることで、この罠を避ける。片方だけ良い
+    時間帯はノイズとして捨てる。
+    """
+    scan, _ = _make_forward_scanner(candles, max_horizon, optimistic_fill)
+    spreads = _spread_series(candles, spread_points_override)
+    usable = _usable_bars(bars, sample_step)
+    if not usable:
+        return []
+
+    midpoint = pd.Timestamp(usable[len(usable) // 2].time)
+    # half=0(前半) / 1(後半) ごとに [件数, follow合計R, fade合計R] を持つ
+    acc: dict[tuple[int, int], list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
+
+    for b in usable:
+        sl_pts = sl_atr_mult * b.atr_points
+        tp_pts = rr * sl_pts
+        if sl_pts <= 0:
+            continue
+        entry = b.close
+        sl_px = sl_pts * point_size
+        tp_px = tp_pts * point_size
+        is_buy = b.h1_direction == "BUY"
+        follow = scan(
+            b.index,
+            entry + tp_px if is_buy else entry - tp_px,
+            entry - sl_px if is_buy else entry + sl_px,
+            is_buy,
+        )
+        if follow < 0:
+            continue
+        fade = scan(
+            b.index,
+            entry - tp_px if is_buy else entry + tp_px,
+            entry + sl_px if is_buy else entry - sl_px,
+            not is_buy,
+        )
+        if fade < 0:
+            continue
+        cost_r = spreads[b.index] / sl_pts
+        t = pd.Timestamp(b.time)
+        key = (int(t.hour), 0 if t < midpoint else 1)
+        cell = acc[key]
+        cell[0] += 1
+        cell[1] += (rr if follow == 1 else -1.0) - cost_r
+        cell[2] += (rr if fade == 1 else -1.0) - cost_r
+
+    rows: list[HourRow] = []
+    for hour in range(24):
+        first = acc.get((hour, 0))
+        second = acc.get((hour, 1))
+        if not first or not second or first[0] == 0 or second[0] == 0:
+            continue
+        rows.append(
+            HourRow(
+                hour=hour,
+                trades_first=int(first[0]),
+                trades_second=int(second[0]),
+                ev_follow_first=first[1] / first[0],
+                ev_follow_second=second[1] / second[0],
+                ev_fade_first=first[2] / first[0],
+                ev_fade_second=second[2] / second[0],
+            )
+        )
+    return rows
+
+
+def run_hour_of_day(rows: list[HourRow], sl_atr_mult: float, rr: float) -> None:
+    print(f"=== 時間帯別の期待値(SL={sl_atr_mult:g}xATR / RR=1:{rr:g}、UTC時刻) ===")
+    print(
+        "データを前半/後半に分けて別々に測定。24時間を総当たりすればエッジが無くても\n"
+        "偶然プラスに見える時間帯は必ず出るため、**前半・後半の両方でプラス**の行だけが候補。\n"
+        "片方だけプラスの行はノイズとして捨てること。\n"
+    )
+    print(f"{'UTC時':<6}{'件数(前)':>9}{'件数(後)':>9}{'追従(前)':>10}{'追従(後)':>10}{'逆張(前)':>10}{'逆張(後)':>10}")
+    for r in rows:
+        print(
+            f"{r.hour:<6}{r.trades_first:>9}{r.trades_second:>9}"
+            f"{r.ev_follow_first:>+10.3f}{r.ev_follow_second:>+10.3f}"
+            f"{r.ev_fade_first:>+10.3f}{r.ev_fade_second:>+10.3f}"
+        )
+
+    survivors = []
+    for r in rows:
+        if r.ev_follow_first > 0 and r.ev_follow_second > 0:
+            survivors.append((r.hour, "追従", min(r.ev_follow_first, r.ev_follow_second)))
+        if r.ev_fade_first > 0 and r.ev_fade_second > 0:
+            survivors.append((r.hour, "逆張り", min(r.ev_fade_first, r.ev_fade_second)))
+    print()
+    if survivors:
+        print("前半・後半の両方でプラスだった時間帯(候補):")
+        for hour, side, worst in sorted(survivors, key=lambda x: -x[2]):
+            print(f"  UTC {hour:02d}時 の{side}: 悪い方の半分でも EV={worst:+.3f}R")
+        print(
+            "\n※これらもまだ候補に過ぎない。次は、この時間帯だけで取引した場合の\n"
+            "  取引回数・ドローダウン・四半期別の安定性を確認すること。"
+        )
+    else:
+        print(
+            "前半・後半の両方でプラスになった時間帯は無し。\n"
+            "→ 時間帯にも利用可能な構造は見つからなかった。"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RuleBasedAIEngineの条件別エッジ監査ツール")
     parser.add_argument("--candles-file", required=True, help="ARTEMIS_HistoryExport.mq5が書き出したJSONファイル")
@@ -675,6 +832,24 @@ def main() -> None:
         action="store_true",
         help="出口ジオメトリ(SL幅×RR)を掃引し、そもそも期待値がプラスになり得る形が"
         "存在するかを検証する。入口条件の議論より先に確認すべき前提",
+    )
+    parser.add_argument(
+        "--by-hour",
+        action="store_true",
+        help="時間帯(UTC時)別の期待値を、データ前半/後半に分けて検証する。価格系指標が"
+        "出尽くした後に残る直交軸(セッション交代・日内の流動性サイクル)を測る",
+    )
+    parser.add_argument(
+        "--hour-sl-mult",
+        type=float,
+        default=6.0,
+        help="--by-hour時のSL幅(ATR倍率)。既定6(--geometryでコスト負けしにくかった水準)",
+    )
+    parser.add_argument(
+        "--hour-rr",
+        type=float,
+        default=1.5,
+        help="--by-hour時のリスクリワード比。既定1.5",
     )
     parser.add_argument(
         "--sl-atr-mults",
@@ -734,6 +909,30 @@ def main() -> None:
         )
 
     fee_note = f"、往復スプレッド{args.spread_points}pt考慮" if args.spread_points else "、スプレッド未考慮"
+
+    if args.by_hour:
+        print(f"{len(candles)}本を読み込みました。指標を計算しています(軽量版)...")
+        bars = compute_period_bars(candles, bars_count, point_size)
+        if not bars:
+            print("分析できるバーがありませんでした(本数不足の可能性)。")
+            return
+        print(f"{len(bars)}バーから{args.sample_step}本おきに時間帯別の期待値を測っています...\n")
+        rows = hour_of_day_analysis(
+            candles,
+            bars,
+            point_size,
+            args.hour_sl_mult,
+            args.hour_rr,
+            spread_points_override=args.spread_points or None,
+            sample_step=args.sample_step,
+            max_horizon=args.max_horizon,
+            optimistic_fill=args.optimistic_fill,
+        )
+        if not rows:
+            print("集計できる時間帯がありませんでした。")
+            return
+        run_hour_of_day(rows, args.hour_sl_mult, args.hour_rr)
+        return
 
     if args.geometry:
         print(f"{len(candles)}本を読み込みました。指標を計算しています(軽量版)...")

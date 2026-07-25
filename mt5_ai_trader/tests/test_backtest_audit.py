@@ -439,3 +439,67 @@ def test_main_by_period_runs_end_to_end(tmp_path, monkeypatch, capsys):
     assert "期間別の概況" in out
     assert "単調性の方向" in out
     assert "ADX<25%" in out
+
+
+# --- 時間帯別(--by-hour)モード ------------------------------------------------
+
+
+def test_hour_of_day_analysis_splits_halves_and_covers_hours():
+    candles = _synthetic_candles(2000)
+    bars = audit.compute_period_bars(candles, bars_count=100, point_size=0.001)
+
+    rows = audit.hour_of_day_analysis(
+        candles, bars, 0.001, sl_atr_mult=2.0, rr=1.5, sample_step=2, max_horizon=128
+    )
+
+    assert rows
+    for row in rows:
+        # 前半・後半の両方に取引がある時間帯だけが返る(再現性を見るため)
+        assert row.trades_first > 0
+        assert row.trades_second > 0
+        assert 0 <= row.hour <= 23
+
+
+def test_hour_of_day_analysis_empty_without_usable_bars():
+    candles = _synthetic_candles(300)
+    assert audit.hour_of_day_analysis(candles, [], 0.001, 2.0, 1.5) == []
+
+
+def test_main_by_hour_runs_end_to_end(tmp_path, monkeypatch, capsys):
+    candles = _synthetic_candles(2000)
+    payload = {
+        "symbol": "USDJPY",
+        "timeframe": "M15",
+        "exported_at": int(candles.iloc[-1]["time"].timestamp()),
+        "candles": [
+            {
+                "time": int(row.time.timestamp()),
+                "open": row.open,
+                "high": row.high,
+                "low": row.low,
+                "close": row.close,
+                "spread": 2,
+            }
+            for row in candles.itertuples()
+        ],
+    }
+    candles_file = tmp_path / "history.json"
+    candles_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backtest_audit.py",
+            "--candles-file", str(candles_file),
+            "--bars-count", "100",
+            "--by-hour",
+            "--hour-sl-mult", "2",
+            "--sample-step", "4",
+        ],
+    )
+
+    audit.main()
+
+    out = capsys.readouterr().out
+    assert "時間帯別の期待値" in out
+    assert "UTC時" in out
