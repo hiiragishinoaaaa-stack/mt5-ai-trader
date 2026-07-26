@@ -492,6 +492,62 @@ def run_curated(
     )
 
 
+def run_score_sweep(
+    candles: pd.DataFrame,
+    cases: list[tuple[int, str]],
+    bars_count: int,
+    thresholds: list[int],
+) -> None:
+    """ルール判断のREQUIRED_SCOREを振り、しきい値調整で読む力が出るかを見る。
+
+    しきい値を上げればWAITが増えてWAIT問題が当たるようになり、その分だけ
+    BUY/SELL問題を落とす。下げればその逆。**どちらに振っても合計がまぐれ水準
+    (33.3%)に張り付くなら、しきい値はエントリー頻度を変えているだけで、
+    方向を読む力を一切生んでいない**ことになる。
+
+    ルール判断はローカルで完結するので、この掃引にAPI呼び出しは発生しない。
+    """
+    windows = []
+    for index, answer in cases:
+        window = candles.iloc[index - bars_count + 1 : index + 1].reset_index(drop=True)
+        windows.append((indicators.add_indicators(window), answer))
+
+    original = config.REQUIRED_SCORE
+    print(f"\n=== REQUIRED_SCORE掃引(rule_based / {len(cases)}問) ===")
+    print(f"{'しきい値':<10}{'BUY':>8}{'SELL':>8}{'WAIT':>8}{'合計正答率':>12}{'WAIT回答数':>12}")
+    try:
+        for threshold in thresholds:
+            config.REQUIRED_SCORE = threshold
+            engine = RuleBasedAIEngine()
+            correct = {"BUY": 0, "SELL": 0, "WAIT": 0}
+            counts = {"BUY": 0, "SELL": 0, "WAIT": 0}
+            wait_answers = 0
+            for enriched, answer in windows:
+                signal = engine.decide(enriched)
+                counts[answer] += 1
+                if signal.action == answer:
+                    correct[answer] += 1
+                if signal.action == "WAIT":
+                    wait_answers += 1
+            total = sum(counts.values())
+            overall = sum(correct.values()) / total * 100 if total else 0.0
+            cells = "".join(
+                f"{(correct[label] / counts[label] * 100 if counts[label] else 0):>7.0f}%"
+                for label in ("BUY", "SELL", "WAIT")
+            )
+            print(f"{threshold:<10}{cells}{overall:>11.1f}%{wait_answers:>12}")
+    finally:
+        config.REQUIRED_SCORE = original
+
+    print(
+        "\n※しきい値を上げるとWAITが増え、下げるとBUY/SELLが増える。合計正答率が"
+        "\n  どのしきい値でも33.3%付近から動かないなら、しきい値はエントリー頻度を"
+        "\n  変えているだけで、方向を読む力は生んでいない。"
+        "\n※どこかのしきい値だけ明確に高いなら、それは偶然を拾っている疑いがある"
+        "\n  (30問しかないので、1問=3.3ポイント動く)。別の期間で再現するか必ず確認すること。"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="保存済みの過去データでAI判断エンジンを走らせ、ルール判断と並べて表示する(発注しない)"
@@ -512,6 +568,12 @@ def main() -> None:
         type=int,
         default=10,
         help="--curated時、BUY/SELL/WAITそれぞれ何問出すか(既定10=合計30問)",
+    )
+    parser.add_argument(
+        "--score-sweep",
+        action="store_true",
+        help="--curated時、ルール判断のREQUIRED_SCOREを1〜12まで振って正答率の変化を見る。"
+        "しきい値調整で読む力が出るのかを一度で確かめる(API呼び出しは発生しない)",
     )
     parser.add_argument(
         "--probe",
@@ -592,6 +654,9 @@ def main() -> None:
         for _, label in cases:
             by_class[label] = by_class.get(label, 0) + 1
         print(f"{len(cases)}問を出題します({by_class})。AIエンジン={args.engine}、発注は一切しません。\n")
+        if args.score_sweep:
+            run_score_sweep(candles, cases, bars_count, list(range(1, 13)))
+            return
         run_curated(
             candles, cases, get_ai_engine(args.engine), args.engine,
             bars_count, args.retries, args.sleep,
