@@ -223,11 +223,21 @@ def probe_generate_content(max_candidates: int = 6) -> None:
         ok, detail = _try_generate(version, model)
         print(f"  {version} / {model}: {'成功' if ok else detail}")
         if ok:
+            print(f"\n動く組み合わせが見つかりました: {version} / {model}")
             print(
-                f"\n動く組み合わせが見つかりました。.env に次の2行を追記してください:\n"
-                f"   GEMINI_API_VERSION={version}\n"
-                f"   GEMINI_MODEL={model}"
+                "まずは .env を書き換えず、このコマンド限定の指定で試すこと:\n"
+                f"   --model {model}"
             )
+            if model.endswith("-latest"):
+                print(
+                    f"\n【注意】{model} は特定の世代ではなく**その時点の最上位世代への別名**。"
+                    "\n無料枠なら課金は発生しないが、課金を有効にすると自動的に一番高い世代を"
+                    "\n使うことになる(実測で最安の flash-lite 系の約6倍)。しかも中身は予告なく"
+                    "\n入れ替わるので、同じ設定でも結果が再現しなくなる。"
+                    "\n**.env には別名ではなく世代を固定したモデル名を書くこと。**"
+                )
+            else:
+                print(f"\n本番でも使うと決めたら .env に:\n   GEMINI_API_VERSION={version}\n   GEMINI_MODEL={model}")
             return
 
     print("\n候補がすべて失敗しました。上のエラー本文をそのまま共有してください。")
