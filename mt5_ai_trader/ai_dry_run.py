@@ -424,6 +424,11 @@ def build_curated_set(
     return selected
 
 
+# 冒頭から連続でこの数だけ失敗したら中断する。1問あたり最大30秒待つため、
+# 全問ぶん再試行すると十数分を無駄にする。
+_ABORT_AFTER_CONSECUTIVE_FAILURES = 3
+
+
 def run_curated(
     candles: pd.DataFrame,
     cases: list[tuple[int, str]],
@@ -438,6 +443,7 @@ def run_curated(
     correct: dict[str, int] = {}
     confusion: dict[tuple[str, str], int] = {}
     failed = 0
+    consecutive_failures = 0
 
     for n, (index, answer) in enumerate(cases, start=1):
         window = candles.iloc[index - bars_count + 1 : index + 1].reset_index(drop=True)
@@ -449,9 +455,24 @@ def run_curated(
         signal = call_engine(engine, enriched, retries, max(sleep_seconds, 30.0))
         if signal.details.get("error"):
             failed += 1
+            consecutive_failures += 1
             print(f"--- {n}/{len(cases)}  {when}  正解={answer}  → 判断できず(集計から除外)")
+            # 最初から連続で落ちるのは1問ごとの一時的な失敗ではなく、
+            # そのモデルの1日あたり上限に当たっている(=待っても回復しない)。
+            # 全問ぶん再試行して十数分を捨てる前に止める。
+            if consecutive_failures >= _ABORT_AFTER_CONSECUTIVE_FAILURES and not counts:
+                print(
+                    f"\n連続{consecutive_failures}問が同じ理由で失敗したため中断しました。"
+                    "\n分あたりの制限なら待てば通るはずなので、これは**1日あたりの上限**の可能性が高い"
+                    "\n(待っても今日は回復しない)。対処は次のどちらか:"
+                    "\n  1. --model で別のモデルに変える。無料枠の上限はモデルごとに別々に持っている"
+                    "\n     (使えるモデルは --probe で確認できる)"
+                    "\n  2. 上限がリセットされるまで待つ(米国太平洋時間の0時 ≒ 日本時間16時)"
+                )
+                break
             continue
 
+        consecutive_failures = 0
         counts[answer] = counts.get(answer, 0) + 1
         hit = signal.action == answer
         correct[answer] = correct.get(answer, 0) + (1 if hit else 0)
@@ -461,7 +482,10 @@ def run_curated(
 
     total = sum(counts.values())
     if not total:
-        print("\n判断が1件も取れませんでした(APIエラー)。")
+        print(
+            "\n判断が1件も取れませんでした(APIエラー)。"
+            "\nAIの能力とは無関係で、APIに届いていないだけ。上の中断メッセージを参照。"
+        )
         return
 
     print(f"\n=== 正答率({engine_name}) ===")

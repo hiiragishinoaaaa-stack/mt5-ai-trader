@@ -740,3 +740,62 @@ def test_run_curated_excludes_api_failures_from_accuracy(capsys):
 
     out = capsys.readouterr().out
     assert "判断が1件も取れませんでした" in out
+
+
+class _AlwaysRateLimited:
+    """毎回429を返すエンジン(ai_engine.error_signalと同じ形の結果を返す)。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def decide(self, df):
+        self.calls += 1
+        return ai_dry_run.Signal(
+            action="WAIT",
+            confidence=0.0,
+            reason="レート制限",
+            details={"error": "HTTP 429"},
+        )
+
+
+def test_run_curated_aborts_early_when_every_call_fails(capsys):
+    """1日あたりの上限に当たっている時、全問ぶん再試行して時間を捨てない。"""
+    candles = _candles(400)
+    cases = [(index, "BUY") for index in range(200, 230)]
+    engine = _AlwaysRateLimited()
+
+    ai_dry_run.run_curated(
+        candles, cases, engine, "gemini", bars_count=100, retries=0, sleep_seconds=0
+    )
+
+    assert engine.calls == ai_dry_run._ABORT_AFTER_CONSECUTIVE_FAILURES
+    out = capsys.readouterr().out
+    assert "中断しました" in out
+    assert "--model" in out
+
+
+def test_run_curated_keeps_going_when_a_failure_is_isolated(capsys):
+    """1問だけ落ちるのは一時的な失敗。そこで止めてはいけない。"""
+    candles = _candles(400)
+    cases = [(index, "BUY") for index in range(200, 206)]
+
+    class _FailsOnce:
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, df):
+            self.calls += 1
+            if self.calls == 1:
+                return ai_dry_run.Signal(
+                    action="WAIT", confidence=0.0, reason="レート制限",
+                    details={"error": "HTTP 429"},
+                )
+            return ai_dry_run.Signal(action="BUY", confidence=0.6, reason="上昇", details={})
+
+    engine = _FailsOnce()
+    ai_dry_run.run_curated(
+        candles, cases, engine, "gemini", bars_count=100, retries=0, sleep_seconds=0
+    )
+
+    assert engine.calls == len(cases)
+    assert "中断しました" not in capsys.readouterr().out
